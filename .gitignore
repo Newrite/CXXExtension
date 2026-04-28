@@ -1,0 +1,9 @@
+.xmake
+build
+cmake-build-debug
+cmake-build-release
+.idea
+.vscode
+.ai
+CMakeLists.txt
+vsxmake2026
