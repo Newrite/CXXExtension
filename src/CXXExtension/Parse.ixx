@@ -6,16 +6,14 @@ import CXXExtension.String;
 import std;
 
 namespace cxx {
-
-    export template <class T>
+    export template<class T>
     concept ParseInteger =
-        std::integral<T> &&
-        !std::same_as<std::remove_cv_t<T>, bool>;
+            std::integral<T> &&
+            !std::same_as<std::remove_cv_t<T>, bool>;
 
-    export template <ParseInteger T>
+    export template<ParseInteger T>
     [[nodiscard]]
-    auto ParseIntegral(std::string_view input, int base = 10) -> Result<T>
-    {
+    auto ParseIntegral(std::string_view input, int base = 10) -> Result<T> {
         const auto original = input;
         input = Internal::TrimAsciiView(input);
 
@@ -27,8 +25,8 @@ namespace cxx {
 
         T value{};
 
-        const char* first = input.data();
-        const char* last = input.data() + input.size();
+        const char *first = input.data();
+        const char *last = input.data() + input.size();
 
         const auto [ptr, ec] = std::from_chars(first, last, value, base);
 
@@ -47,25 +45,22 @@ namespace cxx {
         return value;
     }
 
-    export template <std::signed_integral T = int64_t>
+    export template<std::signed_integral T = int64_t>
     [[nodiscard]]
-    auto ParseInt(std::string_view input, int base = 10) -> Result<T>
-    {
+    auto ParseInt(std::string_view input, int base = 10) -> Result<T> {
         return ParseIntegral<T>(input, base);
     }
 
-    export template <std::unsigned_integral T = uint64_t>
+    export template<std::unsigned_integral T = uint64_t>
     [[nodiscard]]
-    auto ParseUInt(std::string_view input, int base = 10) -> Result<T>
-    {
+    auto ParseUInt(std::string_view input, int base = 10) -> Result<T> {
         return ParseIntegral<T>(input, base);
     }
 
-    export template <std::floating_point T>
+    export template<std::floating_point T>
     [[nodiscard]]
     auto ParseFloating(std::string_view input,
-                       std::chars_format format = std::chars_format::general) -> Result<T>
-    {
+                       std::chars_format format = std::chars_format::general) -> Result<T> {
         const auto original = input;
         input = Internal::TrimAsciiView(input);
 
@@ -74,8 +69,8 @@ namespace cxx {
 
         T value{};
 
-        const char* first = input.data();
-        const char* last = input.data() + input.size();
+        const char *first = input.data();
+        const char *last = input.data() + input.size();
 
         const auto [ptr, ec] = std::from_chars(first, last, value, format);
 
@@ -95,28 +90,24 @@ namespace cxx {
     }
 
     export [[nodiscard]]
-    inline auto ParseFloat(std::string_view input) -> Result<float>
-    {
+    inline auto ParseFloat(std::string_view input) -> Result<float> {
         return ParseFloating<float>(input);
     }
 
     export [[nodiscard]]
-    inline auto ParseDouble(std::string_view input) -> Result<double>
-    {
+    inline auto ParseDouble(std::string_view input) -> Result<double> {
         return ParseFloating<double>(input);
     }
 
     export [[nodiscard]]
-    inline auto ParseLongDouble(std::string_view input) -> Result<long double>
-    {
+    inline auto ParseLongDouble(std::string_view input) -> Result<long double> {
         return ParseFloating<long double>(input);
     }
 
-    export template <class T>
+    export template<class T>
         requires ParseInteger<T> || std::floating_point<T>
     [[nodiscard]]
-    auto ParseNumber(std::string_view input) -> Result<T>
-    {
+    auto ParseNumber(std::string_view input) -> Result<T> {
         if constexpr (ParseInteger<T>) {
             return ParseIntegral<T>(input);
         } else {
@@ -124,10 +115,9 @@ namespace cxx {
         }
     }
 
-    export template <ParseInteger T>
+    export template<ParseInteger T>
     [[nodiscard]]
-    auto ParseHex(std::string_view input) -> Result<T>
-    {
+    auto ParseHex(std::string_view input) -> Result<T> {
         const auto original = input;
 
         input = Internal::TrimAsciiView(input);
@@ -172,27 +162,23 @@ namespace cxx {
     }
 
     export [[nodiscard]]
-    inline auto HexToInt64(std::string_view input) -> Result<int64_t>
-    {
+    inline auto HexToInt64(std::string_view input) -> Result<int64_t> {
         return ParseHex<int64_t>(input);
     }
 
     export [[nodiscard]]
-    inline auto HexToUInt32(std::string_view input) -> Result<uint32_t>
-    {
+    inline auto HexToUInt32(std::string_view input) -> Result<uint32_t> {
         return ParseHex<uint32_t>(input);
     }
 
-    export enum class BoolParseMode
-    {
-        Strict,  // true / false
-        Relaxed  // true / false / 1 / 0 / yes / no / on / off
+    export enum class BoolParseMode {
+        Strict, // true / false
+        Relaxed // true / false / 1 / 0 / yes / no / on / off
     };
 
     export [[nodiscard]]
     inline auto ParseBool(std::string_view input,
-                          BoolParseMode mode = BoolParseMode::Relaxed) -> Result<bool>
-    {
+                          BoolParseMode mode = BoolParseMode::Relaxed) -> Result<bool> {
         const auto original = input;
         input = Internal::TrimAsciiView(input);
 
@@ -223,11 +209,10 @@ namespace cxx {
         return Internal::ParseFailure<bool>("ParseBool", original, "not a boolean");
     }
 
-    export template <class T>
+    export template<class T>
         requires ParseInteger<T> || std::floating_point<T> || std::same_as<T, bool>
     [[nodiscard]]
-    auto Parse(std::string_view input) -> Result<T>
-    {
+    auto Parse(std::string_view input) -> Result<T> {
         if constexpr (std::same_as<T, bool>) {
             return ParseBool(input);
         } else if constexpr (ParseInteger<T>) {
@@ -237,30 +222,28 @@ namespace cxx {
         }
     }
 
-    export enum class CaseMode
-    {
+    export enum class CaseMode {
         Sensitive,
         InsensitiveAscii
     };
 
-    export template <class E>
+    export template<class E>
         requires std::is_enum_v<E>
     [[nodiscard]]
     auto ParseEnum(std::string_view input,
-                   std::initializer_list<std::pair<std::string_view, E>> values,
-                   CaseMode caseMode = CaseMode::InsensitiveAscii) -> Result<E>
-    {
+                   std::initializer_list<std::pair<std::string_view, E> > values,
+                   CaseMode caseMode = CaseMode::InsensitiveAscii) -> Result<E> {
         const auto original = input;
         input = Internal::TrimAsciiView(input);
 
         if (input.empty())
             return Internal::ParseFailure<E>("ParseEnum", original, "empty input");
 
-        for (const auto& [name, value] : values) {
+        for (const auto &[name, value]: values) {
             const bool match =
-                caseMode == CaseMode::Sensitive
-                    ? input == name
-                    : Internal::IEqualsAscii(input, name);
+                    caseMode == CaseMode::Sensitive
+                        ? input == name
+                        : Internal::IEqualsAscii(input, name);
 
             if (match)
                 return value;
@@ -269,11 +252,10 @@ namespace cxx {
         return Internal::ParseFailure<E>("ParseEnum", original, "unknown enum value");
     }
 
-    export template <class T>
+    export template<class T>
         requires ParseInteger<T> || std::floating_point<T> || std::same_as<T, bool>
     [[nodiscard]]
-    auto ParseOptional(std::string_view input) -> Result<std::optional<T>>
-    {
+    auto ParseOptional(std::string_view input) -> Result<std::optional<T> > {
         input = Internal::TrimAsciiView(input);
 
         if (input.empty())
@@ -287,11 +269,10 @@ namespace cxx {
         return std::optional<T>{std::move(*parsed)};
     }
 
-    export template <class T>
+    export template<class T>
         requires ParseInteger<T> || std::floating_point<T> || std::same_as<T, bool>
     [[nodiscard]]
-    auto ParseList(std::string_view input, char delimiter = ',') -> Result<std::vector<T>>
-    {
+    auto ParseList(std::string_view input, char delimiter = ',') -> Result<std::vector<T> > {
         std::vector<T> result;
 
         input = Internal::TrimAsciiView(input);
@@ -305,9 +286,9 @@ namespace cxx {
             const size_t next = input.find(delimiter, pos);
 
             const std::string_view part =
-                next == std::string_view::npos
-                    ? input.substr(pos)
-                    : input.substr(pos, next - pos);
+                    next == std::string_view::npos
+                        ? input.substr(pos)
+                        : input.substr(pos, next - pos);
 
             auto parsed = Parse<T>(part);
 
@@ -324,5 +305,4 @@ namespace cxx {
 
         return result;
     }
-
 }

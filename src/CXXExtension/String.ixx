@@ -5,18 +5,14 @@ import CXXExtension.Core;
 import std;
 
 namespace cxx {
-
-    export namespace Internal
-    {
+    export namespace Internal {
         [[nodiscard]]
-        constexpr auto IsAsciiSpace(char c) noexcept -> bool
-        {
+        constexpr auto IsAsciiSpace(char c) noexcept -> bool {
             return c == ' ' || c == '\t' || c == '\r' || c == '\n';
         }
 
         [[nodiscard]]
-        constexpr auto StripHexPrefix(std::string_view s) noexcept -> std::string_view
-        {
+        constexpr auto StripHexPrefix(std::string_view s) noexcept -> std::string_view {
             if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
                 s.remove_prefix(2);
 
@@ -24,8 +20,7 @@ namespace cxx {
         }
 
         [[nodiscard]]
-        constexpr auto TrimAsciiView(std::string_view s) noexcept -> std::string_view
-        {
+        constexpr auto TrimAsciiView(std::string_view s) noexcept -> std::string_view {
             while (!s.empty() && IsAsciiSpace(s.front()))
                 s.remove_prefix(1);
 
@@ -36,8 +31,7 @@ namespace cxx {
         }
 
         [[nodiscard]]
-        constexpr auto ToLowerAscii(char c) noexcept -> char
-        {
+        constexpr auto ToLowerAscii(char c) noexcept -> char {
             if (c >= 'A' && c <= 'Z')
                 return static_cast<char>(c - 'A' + 'a');
 
@@ -45,8 +39,7 @@ namespace cxx {
         }
 
         [[nodiscard]]
-        constexpr auto IEqualsAscii(std::string_view a, std::string_view b) noexcept -> bool
-        {
+        constexpr auto IEqualsAscii(std::string_view a, std::string_view b) noexcept -> bool {
             if (a.size() != b.size())
                 return false;
 
@@ -61,8 +54,7 @@ namespace cxx {
         [[nodiscard]]
         inline auto MakeParseError(std::string_view function,
                                    std::string_view input,
-                                   std::string_view reason) -> Error
-        {
+                                   std::string_view reason) -> Error {
             std::string message;
             message += function;
             message += ": ";
@@ -74,32 +66,28 @@ namespace cxx {
             return Error{std::move(message)};
         }
 
-        template <class T>
+        template<class T>
         [[nodiscard]]
         auto ParseFailure(std::string_view function,
                           std::string_view input,
-                          std::string_view reason) -> Result<T>
-        {
+                          std::string_view reason) -> Result<T> {
             return std::unexpected(MakeParseError(function, input, reason));
         }
     }
 
 
     // String helpers
-    export auto Trim(std::string_view str) -> std::string
-    {
+    export auto Trim(std::string_view str) -> std::string {
         return std::string{Internal::TrimAsciiView(str)};
     }
 
-    export auto Split(std::string_view str, char delimiter) -> std::vector<std::string>
-    {
+    export auto Split(std::string_view str, char delimiter) -> std::vector<std::string> {
         return str
-            | std::views::split(delimiter)
-            | std::ranges::to<std::vector<std::string>>();
+               | std::views::split(delimiter)
+               | std::ranges::to<std::vector<std::string> >();
     }
 
-    export auto TrimLeft(std::string_view s) -> std::string
-    {
+    export auto TrimLeft(std::string_view s) -> std::string {
         auto view = s | std::views::drop_while([](char c) {
             return c == ' ' || c == '\t' || c == '\r' || c == '\n';
         });
@@ -107,8 +95,7 @@ namespace cxx {
         return std::string{view.begin(), view.end()};
     }
 
-    export auto ToUpper(std::string str) -> std::string
-    {
+    export auto ToUpper(std::string str) -> std::string {
         std::ranges::transform(str, str.begin(), [](unsigned char c) {
             return static_cast<char>(std::toupper(c));
         });
@@ -116,8 +103,7 @@ namespace cxx {
         return str;
     }
 
-    export auto ToLower(std::string str) -> std::string
-    {
+    export auto ToLower(std::string str) -> std::string {
         std::ranges::transform(str, str.begin(), [](unsigned char c) {
             return static_cast<char>(std::tolower(c));
         });
@@ -125,14 +111,13 @@ namespace cxx {
         return str;
     }
 
-    export template <std::ranges::input_range R>
-        requires std::constructible_from<std::string_view, std::ranges::range_reference_t<R>>
-    auto Join(R&& parts, std::string_view separator) -> std::string
-    {
+    export template<std::ranges::input_range R>
+        requires std::constructible_from<std::string_view, std::ranges::range_reference_t<R> >
+    auto Join(R &&parts, std::string_view separator) -> std::string {
         std::string result;
         bool first = true;
 
-        for (auto&& part : parts) {
+        for (auto &&part: parts) {
             if (!first)
                 result += separator;
 
@@ -145,8 +130,7 @@ namespace cxx {
 
     export auto ReplaceAll(std::string_view source,
                            std::string_view from,
-                           std::string_view to) -> std::string
-    {
+                           std::string_view to) -> std::string {
         if (from.empty()) return "";
 
         std::string result;
@@ -167,5 +151,4 @@ namespace cxx {
 
         return result;
     }
-
 }
