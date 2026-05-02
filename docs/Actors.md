@@ -9,7 +9,7 @@ are being handled.
 
 ```cpp
 auto actor = cxx::actor::Make<Message>(State{}, Handler{});
-actor.Post(Message{Connected{}});
+const bool posted = actor.Post(Message{Connected{}});
 actor.Update();
 ```
 
@@ -21,14 +21,14 @@ auto actor = cxx::actor::Make<Message>(State{}, Handler{});
 
 if (actor.Start())
 {
-  actor.Post(Message{Connected{}});
+  const bool posted = actor.Post(Message{Connected{}});
   actor.Stop();
 }
 ```
 
 `Stop()` is idempotent. It closes the incoming buffer, wakes the worker, requests
-thread stop, and joins the worker when called from another thread. Posts after
-stop are ignored by the actor's incoming buffer.
+thread stop, and joins the worker when called from another thread. `Post` returns
+`false` after stop.
 
 Handlers are invoked as:
 
@@ -42,6 +42,31 @@ where `ctx` is `cxx::actor::Context<Message, State>&`, `state` is `State&`, and
 Use `ctx.StashCurrent()` to request that the current message be stashed after
 the handler returns. Use `ctx.Become(...)` to mutate or replace state and then
 restore stashed messages.
+
+## Replies
+
+Request/reply messages use `cxx::actor::Reply<T>` and
+`cxx::actor::ReplyFuture<T>`. A request type opts in by declaring
+`using ReplyType = T;`; `PostAndReply<Request>(args...)` creates the reply
+channel, posts the request, and returns the future.
+
+```cpp
+struct GetCount
+{
+  using ReplyType = int;
+  cxx::actor::Reply<int> reply;
+};
+
+auto future = actor.PostAndReply<GetCount>();
+actor.Update();
+
+auto count = future.Wait();
+```
+
+The handler must resolve or reject the reply exactly once. If the reply handle is
+destroyed unresolved, the future completes with `cxx::actor::Errc::ReplyAbandoned`.
+If the actor is already stopped, `PostAndReply` returns a future rejected with
+`cxx::actor::Errc::Stopped`.
 
 Do not call `Update()` concurrently with another `Update()` or with an
 autonomous worker after `Start()` succeeds.

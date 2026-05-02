@@ -51,13 +51,13 @@ auto main() -> int
 {
   auto actor = cxx::actor::Make<Message>(State{}, Handler{});
 
-  actor.Post(Message{SendChat{"hello before connect"}});
+  if (!actor.Post(Message{SendChat{"hello before connect"}})) return 1;
   actor.Update();
 
-  actor.Post(Message{Connected{}});
+  if (!actor.Post(Message{Connected{}})) return 1;
   actor.Update();
 
-  actor.Post(Message{SendChat{"hello after connect"}});
+  if (!actor.Post(Message{SendChat{"hello after connect"}})) return 1;
   actor.Update();
 
   return actor.IncomingCount() == 0 ? 0 : 1;

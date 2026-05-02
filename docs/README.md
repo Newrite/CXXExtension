@@ -2,7 +2,7 @@
 
 CXXExtension is a C++23 modules library with small utilities for errors, parsing,
 strings, containers, and actor-style message processing. Actors can be pumped
-manually or started on an owned worker thread.
+manually, started on an owned worker thread, and used with one-shot replies.
 
 Import the umbrella module when you want the whole library:
 

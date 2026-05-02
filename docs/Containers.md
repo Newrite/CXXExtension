@@ -40,11 +40,15 @@ calls and an actor-local `Inbox` for processing. It can be manually pumped with
 
 ```cpp
 auto actor = cxx::actor::Make<Message>(State{}, Handler{});
-actor.Post(Message{});
+const bool posted = actor.Post(Message{});
 actor.Update();
 ```
 
-`Stop()` closes the incoming buffer. Posts after stop are ignored.
+`Stop()` closes the incoming buffer. `Post` returns `false` after stop.
+
+Actors also provide one-shot request/reply helpers with
+`cxx::actor::Reply<T>`, `cxx::actor::ReplyFuture<T>`, and
+`Actor::PostAndReply<Request>(...)`.
 
 ## ContainerExtension
 

@@ -417,6 +417,421 @@ private:
   namespace actor
   {
 
+    /// Actor-specific error codes used by replies and stopped actors.
+    export enum class Errc : std::uint16_t
+    {
+      /// No error.
+      None = 0,
+      /// The actor was stopped before a request could be accepted.
+      Stopped,
+      /// A reply handle was destroyed before it was resolved or rejected.
+      ReplyAbandoned,
+      /// A reply was resolved or rejected more than once.
+      ReplyAlreadyCompleted,
+      /// A reply future was consumed more than once.
+      ReplyAlreadyTaken,
+      /// A reply or future has no shared state.
+      ReplyNoState,
+    };
+
+  }
+
+  export template <>
+  struct ErrorCodeTraits<actor::Errc>
+  {
+    /// Error category name used by `std::error_code`.
+    static constexpr const char* Name = "cxx.actor";
+
+    /// Returns the message associated with an actor error code.
+    [[nodiscard]] static constexpr auto Message(actor::Errc code) noexcept -> std::string_view
+    {
+      using enum actor::Errc;
+
+      switch (code)
+      {
+        case None:
+          return "No error";
+        case Stopped:
+          return "Actor is stopped";
+        case ReplyAbandoned:
+          return "Reply was abandoned without a value";
+        case ReplyAlreadyCompleted:
+          return "Reply was already completed";
+        case ReplyAlreadyTaken:
+          return "Reply result was already taken";
+        case ReplyNoState:
+          return "Reply has no shared state";
+        default:
+          return "Unknown actor error";
+      }
+    }
+  };
+
+  namespace actor
+  {
+
+    /// Result type used by actor reply futures.
+    ///
+    /// This is an alias for `cxx::Result<T>`.
+    export template <class T>
+    using ReplyResult = Result<T>;
+
+    /// Shared state for a one-shot reply channel.
+    ///
+    /// The reply side writes one `Result<T>` and notifies waiters. The future
+    /// side may take that result once.
+    template <class T>
+    struct ReplyState
+    {
+      mutable std::mutex       mutex{};
+      std::condition_variable  cv{};
+      std::optional<Result<T>> result{};
+      bool                     taken{false};
+    };
+
+    export template <class T>
+    class Reply;
+
+    /// Future side of a one-shot actor reply.
+    ///
+    /// A `ReplyFuture<T>` is returned to the caller while a matching
+    /// `Reply<T>` is moved into the posted request. The future can be polled
+    /// with `TryTake` or waited on with `Wait`.
+    ///
+    /// ## Ownership
+    ///
+    /// `ReplyFuture` is move-only. The contained result can be consumed once.
+    ///
+    /// ## Error handling
+    ///
+    /// `Wait` returns `Errc::ReplyNoState` for a default-constructed or moved
+    /// from future, `Errc::ReplyAlreadyTaken` after the result was already
+    /// consumed, and the request-provided error if the handler rejects the reply.
+    ///
+    /// ## Thread safety
+    ///
+    /// `IsReady`, `TryTake`, and `Wait` synchronize through the shared reply
+    /// state. Multiple consumers are allowed by the type, but only one can take
+    /// the result successfully.
+    ///
+    /// @tparam T Reply value type.
+    export template <class T>
+    class ReplyFuture
+    {
+  public:
+
+      /// Creates an invalid future with no shared state.
+      ReplyFuture() = default;
+
+      ReplyFuture(const ReplyFuture&)                    = delete;
+      auto operator=(const ReplyFuture&) -> ReplyFuture& = delete;
+
+      ReplyFuture(ReplyFuture&&) noexcept                    = default;
+      auto operator=(ReplyFuture&&) noexcept -> ReplyFuture& = default;
+
+      /// Returns whether this future has shared reply state.
+      [[nodiscard]] auto IsValid() const -> bool
+      {
+        return static_cast<bool>(state);
+      }
+
+      /// Returns whether a result is available without blocking.
+      ///
+      /// Invalid futures are considered ready and will return `ReplyNoState`
+      /// from `TryTake` or `Wait`.
+      [[nodiscard]] auto IsReady() const -> bool
+      {
+        if (!state)
+        {
+          return true;
+        }
+
+        std::lock_guard lock{state->mutex};
+        return state->result.has_value();
+      }
+
+      /// Attempts to take the reply result without blocking.
+      ///
+      /// @return `std::nullopt` when the reply is still pending, otherwise the
+      /// result or an error result. The result can be taken only once.
+      auto TryTake() -> std::optional<Result<T>>
+      {
+        if (!state)
+        {
+          return cxx::Result<T>{std::unexpected{Error::Make(Errc::ReplyNoState)}};
+        }
+
+        std::lock_guard lock{state->mutex};
+
+        if (!state->result)
+        {
+          return std::nullopt;
+        }
+
+        if (state->taken)
+        {
+          return cxx::Result<T>{std::unexpected{Error::Make(Errc::ReplyAlreadyTaken)}};
+        }
+
+        state->taken = true;
+        return std::move(*state->result);
+      }
+
+      /// Waits until the reply is resolved or rejected and consumes the result.
+      ///
+      /// @return The reply value, or a `cxx::Error` when the request was
+      /// rejected, abandoned, already taken, or the future is invalid.
+      auto Wait() -> Result<T>
+      {
+        if (!state)
+        {
+          return std::unexpected{Error::Make(Errc::ReplyNoState)};
+        }
+
+        std::unique_lock lock{state->mutex};
+
+        state->cv.wait(lock, [this] { return state->result.has_value(); });
+
+        if (state->taken)
+        {
+          return std::unexpected{Error::Make(Errc::ReplyAlreadyTaken)};
+        }
+
+        state->taken = true;
+        return std::move(*state->result);
+      }
+
+  private:
+
+      template <class>
+      friend class Reply;
+
+      explicit ReplyFuture(std::shared_ptr<ReplyState<T>> state) : state{std::move(state)} {}
+
+      std::shared_ptr<ReplyState<T>> state{};
+    };
+
+    template <class T>
+    class Reply
+    {
+  public:
+
+      /// Creates an invalid reply handle.
+      Reply() = default;
+
+      Reply(const Reply&)                    = delete;
+      auto operator=(const Reply&) -> Reply& = delete;
+
+      Reply(Reply&&) noexcept                    = default;
+      auto operator=(Reply&&) noexcept -> Reply& = default;
+
+      /// Rejects an unresolved reply as abandoned.
+      ///
+      /// Moving the reply into a request transfers this responsibility to the
+      /// moved-to handle. A handler should normally call `TryResolve` or
+      /// `TryReject` explicitly.
+      ~Reply()
+      {
+        if (state)
+        {
+          [[maybe_unused]] const auto completed = TryReject(Error::Make(Errc::ReplyAbandoned));
+        }
+      }
+
+      /// Returns whether this reply has shared reply state.
+      [[nodiscard]] auto IsValid() const -> bool
+      {
+        return static_cast<bool>(state);
+      }
+
+      /// Resolves the reply with a value.
+      ///
+      /// @return `true` when this call completed the reply, or `false` when the
+      /// reply was invalid or already completed.
+      template <class U>
+      requires std::constructible_from<T, U&&>
+      auto TryResolve(U&& value) -> bool
+      {
+        if (!state)
+        {
+          return false;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (state->result)
+          {
+            return false;
+          }
+
+          state->result.emplace(std::in_place, std::forward<U>(value));
+        }
+
+        state->cv.notify_all();
+        state.reset();
+        return true;
+      }
+
+      /// Rejects the reply with an error.
+      ///
+      /// @return `true` when this call completed the reply, or `false` when the
+      /// reply was invalid or already completed.
+      auto TryReject(cxx::Error error) -> bool
+      {
+        if (!state)
+        {
+          return false;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (state->result)
+          {
+            return false;
+          }
+
+          state->result.emplace(std::unexpected{std::move(error)});
+        }
+
+        state->cv.notify_all();
+        state.reset();
+        return true;
+      }
+
+      /// Rejects the reply with an adapted enum error code.
+      template <class Enum>
+      requires cxx::ErrorCodeEnum<Enum>
+      auto TryReject(Enum code, std::string message = {}) -> bool
+      {
+        return TryReject(cxx::Error::Make(code, std::move(message)));
+      }
+
+  private:
+
+      template <class>
+      friend auto MakeReply() -> std::pair<Reply, ReplyFuture<T>>;
+
+      explicit Reply(std::shared_ptr<ReplyState<T>> state) : state{std::move(state)} {}
+
+      std::shared_ptr<ReplyState<T>> state{};
+    };
+
+    template <class T>
+    auto MakeReply() -> std::pair<Reply<T>, ReplyFuture<T>>
+    {
+      auto state = std::make_shared<ReplyState<T>>();
+
+      return {Reply<T>{state}, ReplyFuture<T>{std::move(state)}};
+    }
+
+    /// Reply handle specialization for requests that complete without a value.
+    export template <>
+    class Reply<void>
+    {
+  public:
+
+      /// Creates an invalid void reply handle.
+      Reply() = default;
+
+      Reply(const Reply&)                    = delete;
+      auto operator=(const Reply&) -> Reply& = delete;
+
+      Reply(Reply&&) noexcept                    = default;
+      auto operator=(Reply&&) noexcept -> Reply& = default;
+
+      /// Rejects an unresolved reply as abandoned.
+      ~Reply()
+      {
+        if (state)
+        {
+          [[maybe_unused]] const auto completed = TryReject(Error::Make(Errc::ReplyAbandoned));
+        }
+      }
+
+      /// Returns whether this reply has shared reply state.
+      [[nodiscard]] auto IsValid() const -> bool
+      {
+        return static_cast<bool>(state);
+      }
+
+      /// Resolves the reply successfully.
+      ///
+      /// @return `true` when this call completed the reply.
+      auto TryResolve() -> bool
+      {
+        if (!state)
+        {
+          return false;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (state->result)
+          {
+            return false;
+          }
+
+          state->result.emplace();
+        }
+
+        state->cv.notify_all();
+        state.reset();
+        return true;
+      }
+
+      /// Rejects the reply with an error.
+      auto TryReject(Error error) -> bool
+      {
+        if (!state)
+        {
+          return false;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (state->result)
+          {
+            return false;
+          }
+
+          state->result.emplace(std::unexpected{std::move(error)});
+        }
+
+        state->cv.notify_all();
+        state.reset();
+        return true;
+      }
+
+      /// Rejects the reply with an adapted enum error code.
+      template <class Enum>
+      requires cxx::ErrorCodeEnum<Enum>
+      auto TryReject(Enum code, std::string message = {}) -> bool
+      {
+        return TryReject(cxx::Error::Make(code, std::move(message)));
+      }
+
+  private:
+
+      template <class>
+      friend auto MakeReply() -> std::pair<Reply, ReplyFuture<void>>;
+
+      explicit Reply(std::shared_ptr<ReplyState<void>> state) : state{std::move(state)} {}
+
+      std::shared_ptr<ReplyState<void>> state{};
+    };
+
+    /// Concept for request types accepted by `Actor::PostAndReply`.
+    ///
+    /// A request type must provide `using ReplyType = T;`. The actor constructs
+    /// the request with a `Reply<T>` as the first constructor or aggregate
+    /// argument, followed by the arguments passed to `PostAndReply`.
+    template <typename Request>
+    concept ReplyRequest = requires { typename Request::ReplyType; };
+
     /// Actor that serializes message handling through manual or autonomous updates.
     export template <typename Message, typename ActorState, typename Handler>
     class Actor;
@@ -554,14 +969,24 @@ private:
       /// `Post` may be called concurrently by multiple external threads.
       ///
       /// @param message Value copied or moved into the actor's incoming buffer.
+      /// @return `true` when the message was accepted, or `false` after stop.
       template <class M>
       requires std::constructible_from<Message, M&&>
-      auto Post(M&& message) -> void
+      auto Post(M&& message) -> bool
       {
-        if (incoming.Push(std::forward<M>(message)))
+        if (IsStopped())
+        {
+          return false;
+        }
+
+        const auto posted = incoming.Push(std::forward<M>(message));
+
+        if (posted)
         {
           wakeCv.notify_all();
         }
+
+        return posted;
       }
 
       /// Processes all currently posted messages and any unstashed work.
@@ -726,7 +1151,80 @@ private:
         return true;
       }
 
+      /// Posts a request and returns a future for its one-shot reply.
+      ///
+      /// `Request` must declare `using ReplyType = T;` and be constructible with
+      /// `Reply<T>` followed by `args...`. When `Message` is a variant that can
+      /// be constructed with `std::in_place_type_t<Request>`, that form is used;
+      /// otherwise the actor constructs `Request{reply, args...}` and then
+      /// constructs `Message` from it.
+      ///
+      /// ## Reply contract
+      ///
+      /// The handler must call `request.reply.TryResolve(...)` or
+      /// `request.reply.TryReject(...)`. If the reply handle is destroyed before
+      /// completion, the future receives `Errc::ReplyAbandoned`.
+      ///
+      /// ## Stopped actors
+      ///
+      /// If the actor is already stopped, no message is posted and the returned
+      /// future is immediately rejected with `Errc::Stopped`.
+      ///
+      /// ## Example
+      ///
+      /// ```cpp
+      /// struct GetCount {
+      ///   using ReplyType = int;
+      ///   cxx::actor::Reply<int> reply;
+      /// };
+      ///
+      /// auto future = actor.PostAndReply<GetCount>();
+      /// actor.Update();
+      ///
+      /// auto count = future.Wait();
+      /// ```
+      ///
+      /// @tparam Request Request message type with `ReplyType`.
+      /// @param args Arguments forwarded after the generated reply handle.
+      /// @return Future that can be waited on or polled.
+      template <class Request, class... Args>
+      requires actor::ReplyRequest<Request>
+      auto PostAndReply(Args&&... args) -> ReplyFuture<typename Request::ReplyType>
+      {
+        using Result = Request::ReplyType;
+
+        auto [reply, future] = actor::MakeReply<Result>();
+
+        if (IsStopped())
+        {
+          [[maybe_unused]] const auto rejected = reply.TryReject(Error::Make(actor::Errc::Stopped));
+
+          return future;
+        }
+
+        auto message = MakeReplyMessage<Request>(std::move(reply), std::forward<Args>(args)...);
+
+        [[maybe_unused]] const auto posted = Post(std::move(message));
+
+        return future;
+      }
+
   private:
+
+      template <class Request, class Result, class... Args>
+      static auto MakeReplyMessage(Reply<Result>&& reply, Args&&... args) -> Message
+      {
+        if constexpr (std::constructible_from<Message, std::in_place_type_t<Request>, Reply<Result>&&, Args&&...>)
+        {
+          return Message{std::in_place_type<Request>, std::move(reply), std::forward<Args>(args)...};
+        }
+        else
+        {
+          return Message{
+              Request{std::move(reply), std::forward<Args>(args)...}
+          };
+        }
+      }
 
       auto UpdateImpl() -> void
       {

@@ -25,7 +25,7 @@ auto main() -> int
 
   if (!actor.Start()) return 1;
 
-  actor.Post(Ping{});
+  if (!actor.Post(Ping{})) return 1;
   actor.Stop();
 
   return actor.IsStopped() ? 0 : 1;
