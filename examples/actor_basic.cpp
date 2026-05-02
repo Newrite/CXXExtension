@@ -1,0 +1,61 @@
+import CXXExtension.Container;
+import std;
+
+struct Connected
+{};
+
+struct SendChat
+{
+  std::string text;
+};
+
+using Message = std::variant<Connected, SendChat>;
+
+struct State
+{
+  bool                     connected{};
+  std::vector<std::string> sent{};
+};
+
+struct Handler
+{
+  auto operator()(cxx::actor::Context<Message, State>& ctx, State& state, Message& message) -> void
+  {
+    std::visit(Visitor{ctx, state}, message);
+  }
+
+  struct Visitor
+  {
+    cxx::actor::Context<Message, State>& ctx;
+    State&                               state;
+
+    auto operator()(Connected&) -> void
+    {
+      ctx.Become([](State& s) { s.connected = true; });
+    }
+
+    auto operator()(SendChat& message) -> void
+    {
+      if (!state.connected)
+      {
+        ctx.StashCurrent();
+        return;
+      }
+
+      state.sent.push_back(message.text);
+    }
+  };
+};
+
+auto main() -> int
+{
+  auto actor = cxx::actor::Make<Message>(State{}, Handler{});
+
+  actor.Post(Message{SendChat{"hello before connect"}});
+  actor.Update();
+
+  actor.Post(Message{Connected{}});
+  actor.Update();
+
+  return actor.IncomingCount() == 0 ? 0 : 1;
+}
