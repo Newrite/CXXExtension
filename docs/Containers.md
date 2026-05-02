@@ -32,6 +32,20 @@ inbox.UnstashAll();
 `UnstashAll` preserves stash order and restores stashed messages before already
 queued messages.
 
+## Actors
+
+`cxx::actor::Actor` uses a synchronized incoming buffer for external `Post`
+calls and an actor-local `Inbox` for processing. It can be manually pumped with
+`Update()` or run on an owned worker thread with `Start()`.
+
+```cpp
+auto actor = cxx::actor::Make<Message>(State{}, Handler{});
+actor.Post(Message{});
+actor.Update();
+```
+
+`Stop()` closes the incoming buffer. Posts after stop are ignored.
+
 ## ContainerExtension
 
 `CXXExtension.ContainerExtension` contains range, vector, and map helpers. The

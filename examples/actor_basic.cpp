@@ -57,5 +57,8 @@ auto main() -> int
   actor.Post(Message{Connected{}});
   actor.Update();
 
+  actor.Post(Message{SendChat{"hello after connect"}});
+  actor.Update();
+
   return actor.IncomingCount() == 0 ? 0 : 1;
 }

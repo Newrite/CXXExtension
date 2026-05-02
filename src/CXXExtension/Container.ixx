@@ -1,9 +1,9 @@
-/// Actor-oriented container primitives and a manually updated actor runtime.
+/// Actor-oriented container primitives and a lightweight actor runtime.
 ///
 /// This module exports owner-local FIFO mailboxes, actor-local inboxes with
 /// stashing, and a lightweight actor abstraction. Actors accept messages from
-/// external threads through `Post`, but process them only when their owner calls
-/// `Update`.
+/// external threads through `Post`. They can either be pumped manually with
+/// `Update` or run autonomously after `Start`.
 export module CXXExtension.Container;
 
 import CXXExtension.Core;
@@ -13,94 +13,140 @@ import std;
 
 namespace cxx
 {
-  export namespace Internal
+
+  /// Thread-safe producer buffer drained by a single owner.
+  ///
+  /// Many producers may call `Push` concurrently. The actor or owner calls
+  /// `Drain` to take the current batch of pending messages and clear the
+  /// buffer.
+  ///
+  /// This is not a full blocking queue and it does not own or start a worker
+  /// thread. It can be closed so later pushes are rejected. `Empty` and `Size`
+  /// are synchronized snapshots intended mostly for diagnostics.
+  ///
+  /// @tparam Message Message type stored by value in the buffer.
+  template <typename Message>
+  struct ThreadSafePushBuffer
   {
+    /// Creates an empty push buffer.
+    explicit ThreadSafePushBuffer() = default;
 
-    /// Thread-safe producer buffer drained by a single owner.
+    /// Creates an empty push buffer with reserved storage.
     ///
-    /// Many producers may call `Push` concurrently. The actor or owner calls
-    /// `Drain` to take the current batch of pending messages and clear the
-    /// buffer.
+    /// Reserving capacity can reduce allocations while producers are posting.
     ///
-    /// This is not a blocking queue and it does not own or start a worker
-    /// thread. `Empty` and `Size` are synchronized snapshots intended mostly for
-    /// diagnostics.
-    ///
-    /// @tparam Message Message type stored by value in the buffer.
-    template <typename Message>
-    struct ThreadSafePushBuffer
+    /// @param initialReserve Initial vector capacity.
+    explicit ThreadSafePushBuffer(std::size_t initialReserve)
     {
-      /// Creates an empty push buffer.
-      explicit ThreadSafePushBuffer() = default;
+      messages.reserve(initialReserve);
+    }
 
-      /// Appends a message to the pending producer buffer.
-      ///
-      /// The message is constructed in place under the buffer mutex.
-      ///
-      /// ## Thread safety
-      ///
-      /// Safe to call concurrently from multiple producer threads.
-      ///
-      /// @tparam M Type used to construct `Message`.
-      /// @param message Value copied or moved into the buffer.
-      template <class M>
-      requires std::constructible_from<Message, M&&>
-      auto Push(M&& message) -> void
+    /// Appends a message to the pending producer buffer.
+    ///
+    /// The message is constructed in place under the buffer mutex.
+    /// If the buffer has been closed, no message is stored.
+    ///
+    /// ## Thread safety
+    ///
+    /// Safe to call concurrently from multiple producer threads.
+    ///
+    /// @tparam M Type used to construct `Message`.
+    /// @param message Value copied or moved into the buffer.
+    /// @return `true` when the message was accepted, or `false` after close.
+    template <class M>
+    requires std::constructible_from<Message, M&&>
+    auto Push(M&& message) -> bool
+    {
+      std::lock_guard lock{mutex};
+
+      if (closed)
+      {
+        return false;
+      }
+
+      messages.emplace_back(std::forward<M>(message));
+      return true;
+    }
+
+    /// Moves all pending messages out as a batch.
+    ///
+    /// The returned vector contains messages in producer insertion order as
+    /// observed by the mutex. The internal buffer is empty after this call.
+    ///
+    /// ## Thread safety
+    ///
+    /// Safe to call while producers call `Push`, but intended to have a single
+    /// draining owner.
+    ///
+    /// @return Vector containing the drained messages.
+    auto Drain() -> std::vector<Message>
+    {
+      std::vector<Message> result;
+
       {
         std::lock_guard lock{mutex};
-        messages.emplace_back(std::forward<M>(message));
+        messages.swap(result);
       }
 
-      /// Moves all pending messages out as a batch.
-      ///
-      /// The returned vector contains messages in producer insertion order as
-      /// observed by the mutex. The internal buffer is empty after this call.
-      ///
-      /// ## Thread safety
-      ///
-      /// Safe to call while producers call `Push`, but intended to have a single
-      /// draining owner.
-      ///
-      /// @return Vector containing the drained messages.
-      auto Drain() -> std::vector<Message>
-      {
-        std::vector<Message> result;
+      return result;
+    }
 
-        {
-          std::lock_guard lock{mutex};
-          messages.swap(result);
-        }
+    /// Closes the buffer and rejects future pushes.
+    ///
+    /// Already buffered messages remain available to `Drain`.
+    auto Close() -> void
+    {
+      std::lock_guard lock{mutex};
+      closed = true;
+    }
 
-        return result;
-      }
+    /// Returns whether the buffer is closed.
+    ///
+    /// This is a synchronized snapshot.
+    [[nodiscard]] auto IsClosed() const -> bool
+    {
+      std::lock_guard lock{mutex};
+      return closed;
+    }
 
-      /// Returns whether the buffer was empty at the moment it was inspected.
-      ///
-      /// The result is a synchronized snapshot and may be stale immediately
-      /// after the call returns.
-      [[nodiscard]] auto Empty() const -> bool
-      {
-        std::lock_guard lock{mutex};
-        return messages.empty();
-      }
+    /// Reserves storage for future pending messages.
+    ///
+    /// This does not reopen a closed buffer and does not affect already stored
+    /// messages.
+    ///
+    /// @param capacity Desired vector capacity.
+    auto Reserve(std::size_t capacity) -> void
+    {
+      std::lock_guard lock{mutex};
+      messages.reserve(capacity);
+    }
 
-      /// Returns the number of pending messages at the moment it was inspected.
-      ///
-      /// The result is a synchronized snapshot and should not be used for
-      /// correctness decisions that depend on future producer activity.
-      [[nodiscard]] auto Size() const -> std::size_t
-      {
-        std::lock_guard lock{mutex};
-        return messages.size();
-      }
+    /// Returns whether the buffer was empty at the moment it was inspected.
+    ///
+    /// The result is a synchronized snapshot and may be stale immediately
+    /// after the call returns.
+    [[nodiscard]] auto Empty() const -> bool
+    {
+      std::lock_guard lock{mutex};
+      return messages.empty();
+    }
 
-  private:
+    /// Returns the number of pending messages at the moment it was inspected.
+    ///
+    /// The result is a synchronized snapshot and should not be used for
+    /// correctness decisions that depend on future producer activity.
+    [[nodiscard]] auto Size() const -> std::size_t
+    {
+      std::lock_guard lock{mutex};
+      return messages.size();
+    }
 
-      mutable std::mutex   mutex{};
-      std::vector<Message> messages{};
-    };
+private:
 
-  }  // namespace Internal
+    mutable std::mutex   mutex{};
+    std::vector<Message> messages{};
+    bool                 closed{false};
+  };
 
   /// Small owner-local FIFO mailbox.
   ///
@@ -371,7 +417,7 @@ private:
   namespace actor
   {
 
-    /// Manually updated actor that serializes message handling through `Update`.
+    /// Actor that serializes message handling through manual or autonomous updates.
     export template <typename Message, typename ActorState, typename Handler>
     class Actor;
 
@@ -481,17 +527,27 @@ private:
 
       /// Creates an actor with initial state and a handler.
       ///
-      /// The actor does not start a thread. It processes messages only when
-      /// `Update` is called.
+      /// The actor does not start a thread until `Start` is called. Without
+      /// `Start`, it processes messages when the owner calls `Update`.
       ///
       /// @param initialState Initial actor state, moved into the actor.
       /// @param handler Callable invoked for each message.
       explicit Actor(ActorState initialState, Handler handler) : state{std::move(initialState)}, handler{std::move(handler)} {}
 
+      /// Stops the autonomous worker, if one is running.
+      ///
+      /// Destruction calls `Stop`. Pending messages that have not been processed
+      /// before the worker exits are discarded with the actor object.
+      ~Actor()
+      {
+        Stop();
+      }
+
       /// Posts a message from any producer thread.
       ///
       /// The message is appended to the synchronized incoming buffer and will be
-      /// processed during a later `Update` call.
+      /// processed during a later `Update` call or by the autonomous worker.
+      /// Messages posted after `Stop` are rejected by the incoming buffer.
       ///
       /// ## Thread safety
       ///
@@ -502,7 +558,10 @@ private:
       requires std::constructible_from<Message, M&&>
       auto Post(M&& message) -> void
       {
-        incoming.Push(std::forward<M>(message));
+        if (incoming.Push(std::forward<M>(message)))
+        {
+          wakeCv.notify_all();
+        }
       }
 
       /// Processes all currently posted messages and any unstashed work.
@@ -512,9 +571,14 @@ private:
       ///
       /// ## Manual update model
       ///
-      /// `Actor` owns no worker thread. The caller decides when processing
-      /// happens by calling `Update`, commonly from a game tick, event loop, or
-      /// service pump.
+      /// Before `Start` is called, the caller decides when processing happens by
+      /// calling `Update`, commonly from a game tick, event loop, or service
+      /// pump.
+      ///
+      /// ## Autonomous mode
+      ///
+      /// After `Start` succeeds, a worker thread owns update processing. Do not
+      /// call `Update` concurrently with that worker.
       ///
       /// ## Handler contract
       ///
@@ -536,7 +600,7 @@ private:
       /// ## Thread safety
       ///
       /// `Update` is owner-thread only. Do not call it concurrently with another
-      /// `Update`.
+      /// `Update` or after `Start` has handed processing to the worker.
       ///
       /// ## Example
       ///
@@ -584,6 +648,88 @@ private:
       /// ```
       auto Update() -> void
       {
+        if (started.load() || IsStopped()) return;
+        UpdateImpl();
+      }
+
+      /// Returns the number of messages waiting in the synchronized incoming buffer.
+      ///
+      /// This is a synchronized snapshot. Messages already drained into the
+      /// actor-local inbox or stash are not counted.
+      [[nodiscard]] auto IncomingCount() const -> std::size_t
+      {
+        return incoming.Size();
+      }
+
+      /// Requests actor shutdown and joins the worker when needed.
+      ///
+      /// `Stop` is idempotent. It closes the incoming buffer so later `Post`
+      /// calls are ignored, requests the autonomous worker to stop, wakes the
+      /// worker, and joins it when called from another thread.
+      ///
+      /// ## Thread safety
+      ///
+      /// `Stop` may be called concurrently with `Post`. Do not call it from a
+      /// handler if the handler must guarantee that remaining queued messages are
+      /// processed.
+      auto Stop() -> void
+      {
+        const auto wasStopped = stopRequested.exchange(true);
+
+        if (!wasStopped)
+        {
+          incoming.Close();
+          wakeCv.notify_all();
+        }
+
+        if (worker.joinable() && worker.get_id() != std::this_thread::get_id())
+        {
+          worker.request_stop();
+          wakeCv.notify_all();
+          worker.join();
+        }
+      }
+
+      /// Returns whether shutdown has been requested.
+      ///
+      /// The result is an atomic snapshot.
+      [[nodiscard]] auto IsStopped() const -> bool
+      {
+        return stopRequested.load();
+      }
+
+      /// Starts autonomous actor processing on a worker thread.
+      ///
+      /// The worker repeatedly drains pending messages, processes the actor-local
+      /// inbox, and sleeps until a new post or stop request wakes it.
+      ///
+      /// ## Thread safety
+      ///
+      /// Call `Start` at most once. Concurrent `Post` is supported after a
+      /// successful start.
+      ///
+      /// @return `true` when the worker was started, or `false` if the actor was
+      /// already started or stopped.
+      auto Start() -> bool
+      {
+        if (IsStopped()) return false;
+
+        bool expected = false;
+
+        if (!started.compare_exchange_strong(expected, true))
+        {
+          return false;
+        }
+
+        worker = std::jthread{[this](std::stop_token stopToken) { Run(stopToken); }};
+
+        return true;
+      }
+
+  private:
+
+      auto UpdateImpl() -> void
+      {
         auto batch = incoming.Drain();
         inbox.AppendMove(batch);
 
@@ -601,22 +747,29 @@ private:
         }
       }
 
-      /// Returns the number of messages waiting in the synchronized incoming buffer.
-      ///
-      /// This is a synchronized snapshot. Messages already drained into the
-      /// actor-local inbox or stash are not counted.
-      [[nodiscard]] auto IncomingCount() const -> std::size_t
+      auto Run(std::stop_token stopToken) -> void
       {
-        return incoming.Size();
+        while (!stopToken.stop_requested() && !IsStopped())
+        {
+          UpdateImpl();
+
+          std::unique_lock lock{wakeMutex};
+
+          wakeCv.wait(lock, [this, &stopToken] { return stopToken.stop_requested() || IsStopped() || !incoming.Empty(); });
+        }
       }
 
-  private:
-
-      Internal::ThreadSafePushBuffer<Message> incoming{};
-      Inbox<Message>                          inbox{};
+      ThreadSafePushBuffer<Message> incoming{};
+      Inbox<Message>                inbox{};
 
       ActorState state;
       Handler    handler;
+
+      mutable std::mutex      wakeMutex{};
+      std::condition_variable wakeCv{};
+      std::atomic_bool        started{false};
+      std::atomic_bool        stopRequested{false};
+      std::jthread            worker{};
     };
 
     /// Creates an actor while deducing state and handler storage types.
@@ -635,7 +788,7 @@ private:
     /// @tparam Message Actor message type.
     /// @param state Initial state copied or moved into the actor.
     /// @param handler Handler copied or moved into the actor.
-    /// @return A manually updated actor.
+    /// @return An actor that can be manually updated or started autonomously.
     export template <typename Message, typename ActorState, typename Handler>
     auto Make(ActorState&& state, Handler&& handler)
     {
