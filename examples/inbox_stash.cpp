@@ -1,4 +1,4 @@
-import CXXExtension.Container;
+import CXXExtension.Collections;
 import std;
 
 auto main() -> int

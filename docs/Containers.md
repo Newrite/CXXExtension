@@ -1,6 +1,6 @@
 # Containers
 
-`CXXExtension.Container` exports `cxx::Mailbox<Message>` and
+`CXXExtension.Collections` exports `cxx::Mailbox<Message>` and
 `cxx::Inbox<Message>`.
 
 ## Mailbox
@@ -33,6 +33,8 @@ inbox.UnstashAll();
 queued messages.
 
 ## Actors
+
+Actors live in `CXXExtension.Concurrency`.
 
 `cxx::actor::Actor` uses a synchronized incoming buffer for external `Post`
 calls and an actor-local `Inbox` for processing. It can be manually pumped with

@@ -16,7 +16,8 @@ Use focused modules when you want a smaller surface:
 import CXXExtension.Core;
 import CXXExtension.Parse;
 import CXXExtension.String;
-import CXXExtension.Container;
+import CXXExtension.Collections;
+import CXXExtension.Concurrency;
 import CXXExtension.ContainerExtension;
 ```
 

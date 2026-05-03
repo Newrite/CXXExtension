@@ -2,6 +2,8 @@
 
 The actor API is a lightweight actor model with two processing modes.
 
+Import `CXXExtension.Concurrency` for actor types and reply helpers.
+
 External threads call `Actor::Post(...)`. Before autonomous mode is started, the
 actor owner calls `Actor::Update()` to process pending work. `Post` is
 synchronized; the inbox, stash, handler, and state are actor-local while messages
