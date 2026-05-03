@@ -50,7 +50,12 @@ actor.Update();
 
 Actors also provide one-shot request/reply helpers with
 `cxx::actor::Reply<T>`, `cxx::actor::ReplyFuture<T>`, and
-`Actor::PostAndReply<Request>(...)`.
+`Actor::PostAndReply<Request>(...)`. These are built on the generic
+`cxx::oneshot::Sender<T>` / `cxx::oneshot::Receiver<T>` channel.
+
+For general producer/consumer queues, `CXXExtension.Concurrency` also exports
+`cxx::channel::Unbounded<T>()` and top-level aliases
+`cxx::UnboundedSender<T>` / `cxx::UnboundedReceiver<T>`.
 
 ## ContainerExtension
 

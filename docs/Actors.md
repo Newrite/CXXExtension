@@ -2,7 +2,8 @@
 
 The actor API is a lightweight actor model with two processing modes.
 
-Import `CXXExtension.Concurrency` for actor types and reply helpers.
+Import `CXXExtension.Concurrency` for actor types, one-shot channels, unbounded
+channels, and reply helpers.
 
 External threads call `Actor::Post(...)`. Before autonomous mode is started, the
 actor owner calls `Actor::Update()` to process pending work. `Post` is
@@ -48,9 +49,10 @@ restore stashed messages.
 ## Replies
 
 Request/reply messages use `cxx::actor::Reply<T>` and
-`cxx::actor::ReplyFuture<T>`. A request type opts in by declaring
-`using ReplyType = T;`; `PostAndReply<Request>(args...)` creates the reply
-channel, posts the request, and returns the future.
+`cxx::actor::ReplyFuture<T>`, which are aliases for the generic
+`cxx::oneshot::Sender<T>` and `cxx::oneshot::Receiver<T>`. A request type opts
+in by declaring `using ReplyType = T;`; `PostAndReply<Request>(args...)` creates
+the channel, posts the request, and returns the receiver.
 
 ```cpp
 struct GetCount
@@ -65,10 +67,25 @@ actor.Update();
 auto count = future.Wait();
 ```
 
-The handler must resolve or reject the reply exactly once. If the reply handle is
-destroyed unresolved, the future completes with `cxx::actor::Errc::ReplyAbandoned`.
+The handler must send or reject the reply exactly once. If the sender is
+destroyed unresolved, the receiver completes with `cxx::oneshot::Errc::Abandoned`.
 If the actor is already stopped, `PostAndReply` returns a future rejected with
 `cxx::actor::Errc::Stopped`.
+
+## Channels
+
+`cxx::channel::Unbounded<T>()` creates a copyable sender and a move-only
+receiver. Sends append to a synchronized FIFO queue; receives move values out.
+
+```cpp
+auto [sender, receiver] = cxx::channel::Unbounded<std::string>();
+
+sender.Send("ready");
+auto message = receiver.WaitReceive();
+```
+
+Use `TryReceive()` to poll without blocking. Closing the channel or dropping the
+last sender makes an empty receiver return `cxx::channel::Errc::Closed`.
 
 Do not call `Update()` concurrently with another `Update()` or with an
 autonomous worker after `Start()` succeeds.

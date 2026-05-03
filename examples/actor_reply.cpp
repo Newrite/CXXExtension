@@ -36,7 +36,7 @@ struct Handler
 
     auto operator()(GetCount& request) const -> void
     {
-      [[maybe_unused]] const bool resolved = request.reply.TryResolve(state.count);
+      [[maybe_unused]] auto sent = request.reply.Send(state.count);
     }
   };
 };

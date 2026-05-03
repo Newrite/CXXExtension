@@ -148,24 +148,1093 @@ private:
     bool                 closed{false};
   };
 
+  namespace oneshot
+  {
+
+    /// Error codes returned by one-shot sender and receiver operations.
+    export enum class Errc : std::uint16_t
+    {
+      /// No error.
+      None = 0,
+      /// The sender was destroyed before sending or rejecting a result.
+      Abandoned,
+      /// The sender was already completed.
+      AlreadyCompleted,
+      /// The receiver result was already consumed.
+      AlreadyTaken,
+      /// The handle has no shared state.
+      NoState,
+      /// The receiver was destroyed before the sender completed.
+      ReceiverDropped,
+    };
+
+    /// Shared state for a one-shot channel.
+    ///
+    /// The sender writes at most one `Result<T>`. The receiver consumes that
+    /// result at most once and marks itself dropped if it is destroyed first.
+    template <class T>
+    struct State
+    {
+      mutable std::mutex       mutex{};
+      std::condition_variable  cv{};
+      std::optional<Result<T>> result{};
+      bool                     taken{false};
+      bool                     receiverAlive{true};
+    };
+
+  }
+
+  export template <>
+  struct ErrorCodeTraits<oneshot::Errc>
+  {
+    /// Error category name used by `std::error_code`.
+    static constexpr const char* Name = "cxx.oneshot";
+
+    /// Returns the message associated with a one-shot error code.
+    [[nodiscard]] static constexpr auto Message(oneshot::Errc code) noexcept -> std::string_view
+    {
+      using enum oneshot::Errc;
+
+      switch (code)
+      {
+        case None:
+          return "No error";
+        case Abandoned:
+          return "One-shot sender was abandoned without a value";
+        case AlreadyCompleted:
+          return "One-shot sender was already completed";
+        case AlreadyTaken:
+          return "One-shot receiver result was already taken";
+        case NoState:
+          return "One-shot handle has no shared state";
+        case ReceiverDropped:
+          return "One-shot receiver was dropped";
+        default:
+          return "Unknown one-shot error";
+      }
+    }
+  };
+
+  namespace oneshot
+  {
+
+    /// Sending side of a one-shot channel.
+    export template <class T>
+    class Sender;
+
+    export template <class T>
+    class Receiver;
+
+    export template <class T>
+    auto Make() -> std::pair<Sender<T>, Receiver<T>>;
+
+    /// Receiving side of a one-shot channel.
+    ///
+    /// A receiver is move-only and can consume its result once. It can be polled
+    /// with `TryTake` or waited on with `Wait`.
+    ///
+    /// ## Ownership
+    ///
+    /// Destroying a receiver marks the channel as dropped. A later sender
+    /// completion returns `Errc::ReceiverDropped`.
+    ///
+    /// ## Error handling
+    ///
+    /// `Wait` and `TryTake` return `Errc::NoState` for invalid receivers and
+    /// `Errc::AlreadyTaken` after the result has already been consumed.
+    ///
+    /// ## Thread safety
+    ///
+    /// Receiver operations synchronize through the shared channel state.
+    ///
+    /// @tparam T Value type sent through the channel.
+    export template <class T>
+    class Receiver
+    {
+  public:
+
+      /// Creates an invalid receiver with no shared state.
+      Receiver() = default;
+
+      Receiver(const Receiver&)                    = delete;
+      auto operator=(const Receiver&) -> Receiver& = delete;
+
+      Receiver(Receiver&& other) noexcept : state{std::exchange(other.state, {})} {}
+
+      auto operator=(Receiver&& other) noexcept -> Receiver&
+      {
+        if (this != &other)
+        {
+          DropReceiver();
+          state = std::exchange(other.state, {});
+        }
+
+        return *this;
+      }
+
+      /// Drops the currently held receiver state, if any.
+      ~Receiver()
+      {
+        DropReceiver();
+      }
+
+      /// Returns whether this receiver has shared state.
+      [[nodiscard]] auto IsValid() const -> bool
+      {
+        return static_cast<bool>(state);
+      }
+
+      /// Returns whether a result is available without blocking.
+      ///
+      /// Invalid receivers are considered ready and return `Errc::NoState` when
+      /// consumed.
+      [[nodiscard]] auto IsReady() const -> bool
+      {
+        if (!state)
+        {
+          return true;
+        }
+
+        std::lock_guard lock{state->mutex};
+        return state->result.has_value();
+      }
+
+      /// Attempts to consume the result without blocking.
+      ///
+      /// @return `std::nullopt` if the channel is still pending, otherwise the
+      /// sent value or error. The result can be consumed only once.
+      auto TryTake() -> std::optional<Result<T>>
+      {
+        if (!state)
+        {
+          return Result<T>{std::unexpected{Error::Make(Errc::NoState)}};
+        }
+
+        std::lock_guard lock{state->mutex};
+
+        if (!state->result)
+        {
+          return std::nullopt;
+        }
+
+        if (state->taken)
+        {
+          return Result<T>{std::unexpected{Error::Make(Errc::AlreadyTaken)}};
+        }
+
+        state->taken = true;
+        return std::move(*state->result);
+      }
+
+      /// Waits until the sender completes and consumes the result.
+      ///
+      /// @return Sent value, sent error, or a one-shot error for invalid or
+      /// already consumed receivers.
+      auto Wait() -> Result<T>
+      {
+        if (!state)
+        {
+          return std::unexpected{Error::Make(Errc::NoState)};
+        }
+
+        std::unique_lock lock{state->mutex};
+
+        state->cv.wait(lock, [this] { return state->result.has_value(); });
+
+        if (state->taken)
+        {
+          return std::unexpected{Error::Make(Errc::AlreadyTaken)};
+        }
+
+        state->taken = true;
+        return std::move(*state->result);
+      }
+
+  private:
+
+      template <class U>
+      friend class Sender;
+
+      template <class U>
+      friend auto Make() -> std::pair<Sender<U>, Receiver<U>>;
+
+      explicit Receiver(std::shared_ptr<State<T>> state) : state{std::move(state)} {}
+
+      auto DropReceiver() -> void
+      {
+        if (!state)
+        {
+          return;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+          state->receiverAlive = false;
+        }
+
+        state->cv.notify_all();
+        state.reset();
+      }
+
+      std::shared_ptr<State<T>> state{};
+    };
+
+    template <class T>
+    class Sender
+    {
+  public:
+
+      /// Creates an invalid sender with no shared state.
+      Sender() = default;
+
+      Sender(const Sender&)                    = delete;
+      auto operator=(const Sender&) -> Sender& = delete;
+
+      Sender(Sender&& other) noexcept : state{std::exchange(other.state, {})} {}
+
+      auto operator=(Sender&& other) noexcept -> Sender&
+      {
+        if (this != &other)
+        {
+          Abandon();
+          state = std::exchange(other.state, {});
+        }
+
+        return *this;
+      }
+
+      /// Abandons the channel if no result was sent.
+      ~Sender()
+      {
+        Abandon();
+      }
+
+      /// Returns whether this sender has shared state.
+      [[nodiscard]] auto IsValid() const -> bool
+      {
+        return static_cast<bool>(state);
+      }
+
+      /// Sends a value and completes the channel.
+      ///
+      /// @return Success, or a one-shot error if the sender is invalid, already
+      /// completed, or the receiver was dropped.
+      template <class U>
+      requires std::constructible_from<T, U&&>
+      auto Send(U&& value) -> Result<void>
+      {
+        if (!state)
+        {
+          return std::unexpected{Error::Make(Errc::NoState)};
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (!state->receiverAlive)
+          {
+            return std::unexpected{Error::Make(Errc::ReceiverDropped)};
+          }
+
+          if (state->result)
+          {
+            return std::unexpected{Error::Make(Errc::AlreadyCompleted)};
+          }
+
+          state->result.emplace(std::in_place, std::forward<U>(value));
+        }
+
+        state->cv.notify_all();
+        state.reset();
+
+        return {};
+      }
+
+      /// Rejects the channel with an error.
+      ///
+      /// @return Success, or a one-shot error if the sender is invalid, already
+      /// completed, or the receiver was dropped.
+      auto Reject(Error error) -> Result<void>
+      {
+        if (!state)
+        {
+          return std::unexpected{Error::Make(Errc::NoState)};
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (!state->receiverAlive)
+          {
+            return std::unexpected{Error::Make(Errc::ReceiverDropped)};
+          }
+
+          if (state->result)
+          {
+            return std::unexpected{Error::Make(Errc::AlreadyCompleted)};
+          }
+
+          state->result.emplace(std::unexpected{std::move(error)});
+        }
+
+        state->cv.notify_all();
+        state.reset();
+
+        return {};
+      }
+
+      /// Rejects the channel with an adapted enum error code.
+      template <class Enum>
+      requires ErrorCodeEnum<Enum>
+      auto Reject(Enum code, std::string message = {}) -> Result<void>
+      {
+        return Reject(Error::Make(code, std::move(message)));
+      }
+
+      /// Attempts to send a value and returns only whether it succeeded.
+      template <class U>
+      requires std::constructible_from<T, U&&>
+      auto TrySend(U&& value) -> bool
+      {
+        return Send(std::forward<U>(value)).has_value();
+      }
+
+      /// Attempts to reject the channel and returns only whether it succeeded.
+      auto TryReject(Error error) -> bool
+      {
+        return Reject(std::move(error)).has_value();
+      }
+
+      template <class Enum>
+      requires ErrorCodeEnum<Enum>
+      auto TryReject(Enum code, std::string message = {}) -> bool
+      {
+        return Reject(code, std::move(message)).has_value();
+      }
+
+  private:
+
+      template <class U>
+      friend auto Make() -> std::pair<Sender<U>, Receiver<U>>;
+
+      explicit Sender(std::shared_ptr<State<T>> state) : state{std::move(state)} {}
+
+      auto Abandon() -> void
+      {
+        if (!state)
+        {
+          return;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (!state->result && state->receiverAlive)
+          {
+            state->result.emplace(std::unexpected{Error::Make(Errc::Abandoned)});
+          }
+        }
+
+        state->cv.notify_all();
+        state.reset();
+      }
+
+      std::shared_ptr<State<T>> state{};
+    };
+
+    export template <>
+    class Sender<void>
+    {
+  public:
+
+      /// Creates an invalid sender with no shared state.
+      Sender() = default;
+
+      Sender(const Sender&)                    = delete;
+      auto operator=(const Sender&) -> Sender& = delete;
+
+      Sender(Sender&& other) noexcept : state{std::exchange(other.state, {})} {}
+
+      auto operator=(Sender&& other) noexcept -> Sender&
+      {
+        if (this != &other)
+        {
+          Abandon();
+          state = std::exchange(other.state, {});
+        }
+
+        return *this;
+      }
+
+      /// Abandons the channel if no result was sent.
+      ~Sender()
+      {
+        Abandon();
+      }
+
+      /// Returns whether this sender has shared state.
+      [[nodiscard]] auto IsValid() const -> bool
+      {
+        return static_cast<bool>(state);
+      }
+
+      /// Sends successful completion without a value.
+      ///
+      /// @return Success, or a one-shot error if the sender is invalid, already
+      /// completed, or the receiver was dropped.
+      auto Send() -> Result<void>
+      {
+        if (!state)
+        {
+          return std::unexpected{Error::Make(Errc::NoState)};
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (!state->receiverAlive)
+          {
+            return std::unexpected{Error::Make(Errc::ReceiverDropped)};
+          }
+
+          if (state->result)
+          {
+            return std::unexpected{Error::Make(Errc::AlreadyCompleted)};
+          }
+
+          state->result.emplace();
+        }
+
+        state->cv.notify_all();
+        state.reset();
+
+        return {};
+      }
+
+      /// Rejects the channel with an error.
+      auto Reject(Error error) -> Result<void>
+      {
+        if (!state)
+        {
+          return std::unexpected{Error::Make(Errc::NoState)};
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (!state->receiverAlive)
+          {
+            return std::unexpected{Error::Make(Errc::ReceiverDropped)};
+          }
+
+          if (state->result)
+          {
+            return std::unexpected{Error::Make(Errc::AlreadyCompleted)};
+          }
+
+          state->result.emplace(std::unexpected{std::move(error)});
+        }
+
+        state->cv.notify_all();
+        state.reset();
+
+        return {};
+      }
+
+      /// Rejects the channel with an adapted enum error code.
+      template <class Enum>
+      requires ErrorCodeEnum<Enum>
+      auto Reject(Enum code, std::string message = {}) -> Result<void>
+      {
+        return Reject(Error::Make(code, std::move(message)));
+      }
+
+      /// Attempts to send successful completion and returns only whether it succeeded.
+      auto TrySend() -> bool
+      {
+        return Send().has_value();
+      }
+
+      /// Attempts to reject the channel and returns only whether it succeeded.
+      auto TryReject(Error error) -> bool
+      {
+        return Reject(std::move(error)).has_value();
+      }
+
+      template <class Enum>
+      requires ErrorCodeEnum<Enum>
+      auto TryReject(Enum code, std::string message = {}) -> bool
+      {
+        return Reject(code, std::move(message)).has_value();
+      }
+
+  private:
+
+      template <class U>
+      friend auto Make() -> std::pair<Sender<U>, Receiver<U>>;
+
+      explicit Sender(std::shared_ptr<State<void>> state) : state{std::move(state)} {}
+
+      auto Abandon() -> void
+      {
+        if (!state)
+        {
+          return;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (!state->result && state->receiverAlive)
+          {
+            state->result.emplace(std::unexpected{Error::Make(Errc::Abandoned)});
+          }
+        }
+
+        state->cv.notify_all();
+        state.reset();
+      }
+
+      std::shared_ptr<State<void>> state{};
+    };
+
+    /// Creates a sender/receiver pair for one-shot communication.
+    ///
+    /// ## Example
+    ///
+    /// ```cpp
+    /// auto [sender, receiver] = cxx::oneshot::Make<int>();
+    ///
+    /// sender.Send(42);
+    /// auto value = receiver.Wait();
+    /// ```
+    ///
+    /// @tparam T Value type sent through the channel.
+    /// @return Move-only sender and receiver pair sharing one channel state.
+    template <class T>
+    auto Make() -> std::pair<Sender<T>, Receiver<T>>
+    {
+      auto state = std::make_shared<State<T>>();
+
+      return {Sender<T>{state}, Receiver<T>{std::move(state)}};
+    }
+
+  }
+
+  namespace channel
+  {
+
+    /// Error codes returned by unbounded channel operations.
+    export enum class Errc : std::uint16_t
+    {
+      /// No error.
+      None = 0,
+      /// The channel was closed or all senders were dropped.
+      Closed,
+      /// The receiver was destroyed before a sender sent a value.
+      ReceiverDropped,
+      /// The handle has no shared state.
+      NoState,
+    };
+
+  }
+
+  export template <>
+  struct ErrorCodeTraits<channel::Errc>
+  {
+    /// Error category name used by `std::error_code`.
+    static constexpr const char* Name = "cxx.channel";
+
+    /// Returns the message associated with a channel error code.
+    [[nodiscard]] static constexpr auto Message(channel::Errc code) noexcept -> std::string_view
+    {
+      using enum channel::Errc;
+
+      switch (code)
+      {
+        case None:
+          return "No error";
+        case Closed:
+          return "Channel is closed";
+        case ReceiverDropped:
+          return "Channel receiver was dropped";
+        case NoState:
+          return "Channel handle has no shared state";
+        default:
+          return "Unknown channel error";
+      }
+    }
+  };
+
+  namespace channel
+  {
+
+    /// Concept for values accepted by unbounded channels.
+    ///
+    /// Channel messages must be non-const object types and move constructible
+    /// because receive operations move values out of the queue.
+    export template <class T>
+    concept ChannelValue = std::is_object_v<T> && !std::is_const_v<T> && std::move_constructible<T>;
+
+    /// Shared state for an unbounded channel.
+    ///
+    /// Multiple senders append into `messages`; one receiver drains from the
+    /// front. `senderCount` lets the receiver detect closure when the last sender
+    /// is dropped.
+    template <ChannelValue T>
+    struct State
+    {
+      mutable std::mutex      mutex{};
+      std::condition_variable cv{};
+      std::deque<T>           messages{};
+
+      bool        closed{false};
+      bool        receiverAlive{true};
+      std::size_t senderCount{0};
+    };
+
+    /// Sending side of an unbounded channel.
+    ///
+    /// Senders are copyable. Each copy keeps the channel open until it is
+    /// destroyed, moved from, or explicitly closed.
+    ///
+    /// @tparam T Message type stored by value.
+    export template <ChannelValue T>
+    class UnboundedSender;
+
+    /// Receiving side of an unbounded channel.
+    ///
+    /// Receivers are move-only. There is one receiving handle for each channel.
+    ///
+    /// @tparam T Message type received by value.
+    export template <ChannelValue T>
+    class UnboundedReceiver;
+
+    /// Creates an unbounded channel with one sender and one receiver.
+    ///
+    /// ## Example
+    ///
+    /// ```cpp
+    /// auto [sender, receiver] = cxx::channel::Unbounded<std::string>();
+    ///
+    /// sender.Send("hello");
+    /// auto message = receiver.WaitReceive();
+    /// ```
+    ///
+    /// @tparam T Message type stored by value.
+    /// @return Sender and receiver pair sharing one channel state.
+    export template <ChannelValue T>
+    auto Unbounded() -> std::pair<UnboundedSender<T>, UnboundedReceiver<T>>;
+
+    /// Sending side of an unbounded multi-producer channel.
+    ///
+    /// `UnboundedSender` appends messages to a shared FIFO queue. Copies are
+    /// allowed and all senders share the same receiver.
+    ///
+    /// ## Thread safety
+    ///
+    /// `Send`, `TrySend`, `Close`, and sender copy/drop operations synchronize
+    /// through the channel state. Multiple producer threads may send
+    /// concurrently.
+    ///
+    /// ## Error handling
+    ///
+    /// `Send` returns `channel::Errc::Closed` after close, `ReceiverDropped`
+    /// after the receiver is destroyed, and `NoState` for invalid handles.
+    template <ChannelValue T>
+    class UnboundedSender
+    {
+  public:
+
+      /// Creates an invalid sender with no shared state.
+      UnboundedSender() = default;
+
+      /// Copies a sender and keeps the channel open.
+      UnboundedSender(const UnboundedSender& other) : state{other.state}
+      {
+        AddSender();
+      }
+
+      /// Copies a sender and releases any previous sender state.
+      auto operator=(const UnboundedSender& other) -> UnboundedSender&
+      {
+        if (this != &other)
+        {
+          DropSender();
+          state = other.state;
+          AddSender();
+        }
+
+        return *this;
+      }
+
+      /// Moves a sender handle.
+      UnboundedSender(UnboundedSender&& other) noexcept : state{std::exchange(other.state, {})} {}
+
+      /// Moves a sender handle and releases any previous sender state.
+      auto operator=(UnboundedSender&& other) noexcept -> UnboundedSender&
+      {
+        if (this != &other)
+        {
+          DropSender();
+          state = std::exchange(other.state, {});
+        }
+
+        return *this;
+      }
+
+      /// Drops this sender handle.
+      ~UnboundedSender()
+      {
+        DropSender();
+      }
+
+      /// Returns whether this sender has shared channel state.
+      [[nodiscard]] auto IsValid() const -> bool
+      {
+        return static_cast<bool>(state);
+      }
+
+      /// Returns whether this sender can no longer send messages.
+      ///
+      /// The result is a synchronized snapshot.
+      [[nodiscard]] auto IsClosed() const -> bool
+      {
+        if (!state)
+        {
+          return true;
+        }
+
+        std::lock_guard lock{state->mutex};
+        return state->closed || !state->receiverAlive;
+      }
+
+      /// Sends a message to the back of the channel queue.
+      ///
+      /// @param message Value copied or moved into the channel.
+      /// @return Success or a channel error.
+      template <class M>
+      requires std::constructible_from<T, M&&>
+      auto Send(M&& message) -> Result<void>
+      {
+        if (!state)
+        {
+          return std::unexpected{Error::Make(Errc::NoState)};
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (!state->receiverAlive)
+          {
+            return std::unexpected{Error::Make(Errc::ReceiverDropped)};
+          }
+
+          if (state->closed)
+          {
+            return std::unexpected{Error::Make(Errc::Closed)};
+          }
+
+          state->messages.emplace_back(std::forward<M>(message));
+        }
+
+        state->cv.notify_one();
+        return {};
+      }
+
+      /// Attempts to send a message and returns only whether it succeeded.
+      template <class M>
+      requires std::constructible_from<T, M&&>
+      auto TrySend(M&& message) -> bool
+      {
+        return Send(std::forward<M>(message)).has_value();
+      }
+
+      /// Closes the channel from the sender side.
+      ///
+      /// Already queued messages remain available to the receiver.
+      auto Close() -> void
+      {
+        if (!state)
+        {
+          return;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+          state->closed = true;
+        }
+
+        state->cv.notify_all();
+      }
+
+  private:
+
+      template <ChannelValue U>
+      friend auto Unbounded() -> std::pair<UnboundedSender<U>, UnboundedReceiver<U>>;
+
+      explicit UnboundedSender(std::shared_ptr<State<T>> state) : state{std::move(state)}
+      {
+        AddSender();
+      }
+
+      auto AddSender() -> void
+      {
+        if (!state)
+        {
+          return;
+        }
+
+        std::lock_guard lock{state->mutex};
+        ++state->senderCount;
+      }
+
+      auto DropSender() -> void
+      {
+        if (!state)
+        {
+          return;
+        }
+
+        bool shouldNotify = false;
+
+        {
+          std::lock_guard lock{state->mutex};
+
+          if (state->senderCount > 0)
+          {
+            --state->senderCount;
+            shouldNotify = state->senderCount == 0;
+          }
+        }
+
+        if (shouldNotify)
+        {
+          state->cv.notify_all();
+        }
+
+        state.reset();
+      }
+
+      std::shared_ptr<State<T>> state{};
+    };
+
+    /// Receiving side of an unbounded channel.
+    ///
+    /// The receiver drains messages in FIFO order. It can poll with
+    /// `TryReceive` or block with `WaitReceive`.
+    ///
+    /// ## Thread safety
+    ///
+    /// Receiver operations synchronize with senders. The receiver handle itself
+    /// is move-only and should have a single owning consumer.
+    ///
+    /// ## Error handling
+    ///
+    /// Receiving returns `channel::Errc::Closed` when the queue is empty and the
+    /// channel is closed or all senders are gone. Invalid handles return
+    /// `channel::Errc::NoState`.
+    template <ChannelValue T>
+    class UnboundedReceiver
+    {
+  public:
+
+      /// Creates an invalid receiver with no shared state.
+      UnboundedReceiver() = default;
+
+      UnboundedReceiver(const UnboundedReceiver&)                    = delete;
+      auto operator=(const UnboundedReceiver&) -> UnboundedReceiver& = delete;
+
+      /// Moves a receiver handle.
+      UnboundedReceiver(UnboundedReceiver&& other) noexcept : state{std::exchange(other.state, {})} {}
+
+      /// Moves a receiver handle and drops any previous receiver state.
+      auto operator=(UnboundedReceiver&& other) noexcept -> UnboundedReceiver&
+      {
+        if (this != &other)
+        {
+          DropReceiver();
+          state = std::exchange(other.state, {});
+        }
+
+        return *this;
+      }
+
+      /// Drops the receiver and wakes blocked senders or receivers.
+      ~UnboundedReceiver()
+      {
+        DropReceiver();
+      }
+
+      /// Returns whether this receiver has shared channel state.
+      [[nodiscard]] auto IsValid() const -> bool
+      {
+        return static_cast<bool>(state);
+      }
+
+      /// Returns whether no further messages can arrive.
+      ///
+      /// The result is a synchronized snapshot. Queued messages may still remain.
+      [[nodiscard]] auto IsClosed() const -> bool
+      {
+        if (!state)
+        {
+          return true;
+        }
+
+        std::lock_guard lock{state->mutex};
+        return state->closed || state->senderCount == 0;
+      }
+
+      /// Returns whether no messages are currently queued.
+      ///
+      /// The result is a synchronized snapshot.
+      [[nodiscard]] auto Empty() const -> bool
+      {
+        if (!state)
+        {
+          return true;
+        }
+
+        std::lock_guard lock{state->mutex};
+        return state->messages.empty();
+      }
+
+      /// Returns the current queued message count.
+      ///
+      /// The result is a synchronized snapshot.
+      [[nodiscard]] auto Size() const -> std::size_t
+      {
+        if (!state)
+        {
+          return 0;
+        }
+
+        std::lock_guard lock{state->mutex};
+        return state->messages.size();
+      }
+
+      /// Attempts to receive one message without blocking.
+      ///
+      /// @return `std::nullopt` when the channel is open but empty; otherwise a
+      /// message or channel error.
+      auto TryReceive() -> std::optional<Result<T>>
+      {
+        if (!state)
+        {
+          return Result<T>{std::unexpected{Error::Make(Errc::NoState)}};
+        }
+
+        std::lock_guard lock{state->mutex};
+
+        if (!state->messages.empty())
+        {
+          T value = std::move(state->messages.front());
+          state->messages.pop_front();
+
+          return Result<T>{std::move(value)};
+        }
+
+        if (state->closed || state->senderCount == 0)
+        {
+          return Result<T>{std::unexpected{Error::Make(Errc::Closed)}};
+        }
+
+        return std::nullopt;
+      }
+
+      /// Waits until a message is available or the channel is closed.
+      ///
+      /// @return The next message, or `channel::Errc::Closed` /
+      /// `channel::Errc::NoState`.
+      auto WaitReceive() -> Result<T>
+      {
+        if (!state)
+        {
+          return std::unexpected{Error::Make(Errc::NoState)};
+        }
+
+        std::unique_lock lock{state->mutex};
+
+        state->cv.wait(lock, [this] { return !state->messages.empty() || state->closed || state->senderCount == 0; });
+
+        if (!state->messages.empty())
+        {
+          T value = std::move(state->messages.front());
+          state->messages.pop_front();
+
+          return value;
+        }
+
+        return std::unexpected{Error::Make(Errc::Closed)};
+      }
+
+      /// Closes the channel from the receiver side.
+      ///
+      /// Already queued messages remain available to receive.
+      auto Close() -> void
+      {
+        if (!state)
+        {
+          return;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+          state->closed = true;
+        }
+
+        state->cv.notify_all();
+      }
+
+  private:
+
+      template <ChannelValue U>
+      friend auto Unbounded() -> std::pair<UnboundedSender<U>, UnboundedReceiver<U>>;
+
+      explicit UnboundedReceiver(std::shared_ptr<State<T>> state) : state{std::move(state)} {}
+
+      auto DropReceiver() -> void
+      {
+        if (!state)
+        {
+          return;
+        }
+
+        {
+          std::lock_guard lock{state->mutex};
+          state->receiverAlive = false;
+          state->closed        = true;
+        }
+
+        state->cv.notify_all();
+        state.reset();
+      }
+
+      std::shared_ptr<State<T>> state{};
+    };
+
+    /// Creates an unbounded channel with one sender and one receiver.
+    template <ChannelValue T>
+    auto Unbounded() -> std::pair<UnboundedSender<T>, UnboundedReceiver<T>>
+    {
+      auto state = std::make_shared<State<T>>();
+
+      return {UnboundedSender<T>{state}, UnboundedReceiver<T>{std::move(state)}};
+    }
+
+  }
+
   namespace actor
   {
 
-    /// Actor-specific error codes used by replies and stopped actors.
+    /// Actor-specific error codes.
     export enum class Errc : std::uint16_t
     {
       /// No error.
       None = 0,
       /// The actor was stopped before a request could be accepted.
       Stopped,
-      /// A reply handle was destroyed before it was resolved or rejected.
-      ReplyAbandoned,
-      /// A reply was resolved or rejected more than once.
-      ReplyAlreadyCompleted,
-      /// A reply future was consumed more than once.
-      ReplyAlreadyTaken,
-      /// A reply or future has no shared state.
-      ReplyNoState,
     };
 
   }
@@ -187,14 +1256,6 @@ private:
           return "No error";
         case Stopped:
           return "Actor is stopped";
-        case ReplyAbandoned:
-          return "Reply was abandoned without a value";
-        case ReplyAlreadyCompleted:
-          return "Reply was already completed";
-        case ReplyAlreadyTaken:
-          return "Reply result was already taken";
-        case ReplyNoState:
-          return "Reply has no shared state";
         default:
           return "Unknown actor error";
       }
@@ -210,353 +1271,17 @@ private:
     export template <class T>
     using ReplyResult = Result<T>;
 
-    /// Shared state for a one-shot reply channel.
+    /// Sending side of an actor request/reply channel.
     ///
-    /// The reply side writes one `Result<T>` and notifies waiters. The future
-    /// side may take that result once.
-    template <class T>
-    struct ReplyState
-    {
-      mutable std::mutex       mutex{};
-      std::condition_variable  cv{};
-      std::optional<Result<T>> result{};
-      bool                     taken{false};
-    };
-
+    /// This is an alias for `cxx::oneshot::Sender<T>`.
     export template <class T>
-    class Reply;
+    using Reply = oneshot::Sender<T>;
 
-    /// Future side of a one-shot actor reply.
+    /// Receiving side of an actor request/reply channel.
     ///
-    /// A `ReplyFuture<T>` is returned to the caller while a matching
-    /// `Reply<T>` is moved into the posted request. The future can be polled
-    /// with `TryTake` or waited on with `Wait`.
-    ///
-    /// ## Ownership
-    ///
-    /// `ReplyFuture` is move-only. The contained result can be consumed once.
-    ///
-    /// ## Error handling
-    ///
-    /// `Wait` returns `Errc::ReplyNoState` for a default-constructed or moved
-    /// from future, `Errc::ReplyAlreadyTaken` after the result was already
-    /// consumed, and the request-provided error if the handler rejects the reply.
-    ///
-    /// ## Thread safety
-    ///
-    /// `IsReady`, `TryTake`, and `Wait` synchronize through the shared reply
-    /// state. Multiple consumers are allowed by the type, but only one can take
-    /// the result successfully.
-    ///
-    /// @tparam T Reply value type.
+    /// This is an alias for `cxx::oneshot::Receiver<T>`.
     export template <class T>
-    class ReplyFuture
-    {
-  public:
-
-      /// Creates an invalid future with no shared state.
-      ReplyFuture() = default;
-
-      ReplyFuture(const ReplyFuture&)                    = delete;
-      auto operator=(const ReplyFuture&) -> ReplyFuture& = delete;
-
-      ReplyFuture(ReplyFuture&&) noexcept                    = default;
-      auto operator=(ReplyFuture&&) noexcept -> ReplyFuture& = default;
-
-      /// Returns whether this future has shared reply state.
-      [[nodiscard]] auto IsValid() const -> bool
-      {
-        return static_cast<bool>(state);
-      }
-
-      /// Returns whether a result is available without blocking.
-      ///
-      /// Invalid futures are considered ready and will return `ReplyNoState`
-      /// from `TryTake` or `Wait`.
-      [[nodiscard]] auto IsReady() const -> bool
-      {
-        if (!state)
-        {
-          return true;
-        }
-
-        std::lock_guard lock{state->mutex};
-        return state->result.has_value();
-      }
-
-      /// Attempts to take the reply result without blocking.
-      ///
-      /// @return `std::nullopt` when the reply is still pending, otherwise the
-      /// result or an error result. The result can be taken only once.
-      auto TryTake() -> std::optional<Result<T>>
-      {
-        if (!state)
-        {
-          return cxx::Result<T>{std::unexpected{Error::Make(Errc::ReplyNoState)}};
-        }
-
-        std::lock_guard lock{state->mutex};
-
-        if (!state->result)
-        {
-          return std::nullopt;
-        }
-
-        if (state->taken)
-        {
-          return cxx::Result<T>{std::unexpected{Error::Make(Errc::ReplyAlreadyTaken)}};
-        }
-
-        state->taken = true;
-        return std::move(*state->result);
-      }
-
-      /// Waits until the reply is resolved or rejected and consumes the result.
-      ///
-      /// @return The reply value, or a `cxx::Error` when the request was
-      /// rejected, abandoned, already taken, or the future is invalid.
-      auto Wait() -> Result<T>
-      {
-        if (!state)
-        {
-          return std::unexpected{Error::Make(Errc::ReplyNoState)};
-        }
-
-        std::unique_lock lock{state->mutex};
-
-        state->cv.wait(lock, [this] { return state->result.has_value(); });
-
-        if (state->taken)
-        {
-          return std::unexpected{Error::Make(Errc::ReplyAlreadyTaken)};
-        }
-
-        state->taken = true;
-        return std::move(*state->result);
-      }
-
-  private:
-
-      template <class>
-      friend class Reply;
-
-      explicit ReplyFuture(std::shared_ptr<ReplyState<T>> state) : state{std::move(state)} {}
-
-      std::shared_ptr<ReplyState<T>> state{};
-    };
-
-    template <class T>
-    class Reply
-    {
-  public:
-
-      /// Creates an invalid reply handle.
-      Reply() = default;
-
-      Reply(const Reply&)                    = delete;
-      auto operator=(const Reply&) -> Reply& = delete;
-
-      Reply(Reply&&) noexcept                    = default;
-      auto operator=(Reply&&) noexcept -> Reply& = default;
-
-      /// Rejects an unresolved reply as abandoned.
-      ///
-      /// Moving the reply into a request transfers this responsibility to the
-      /// moved-to handle. A handler should normally call `TryResolve` or
-      /// `TryReject` explicitly.
-      ~Reply()
-      {
-        if (state)
-        {
-          [[maybe_unused]] const auto completed = TryReject(Error::Make(Errc::ReplyAbandoned));
-        }
-      }
-
-      /// Returns whether this reply has shared reply state.
-      [[nodiscard]] auto IsValid() const -> bool
-      {
-        return static_cast<bool>(state);
-      }
-
-      /// Resolves the reply with a value.
-      ///
-      /// @return `true` when this call completed the reply, or `false` when the
-      /// reply was invalid or already completed.
-      template <class U>
-      requires std::constructible_from<T, U&&>
-      auto TryResolve(U&& value) -> bool
-      {
-        if (!state)
-        {
-          return false;
-        }
-
-        {
-          std::lock_guard lock{state->mutex};
-
-          if (state->result)
-          {
-            return false;
-          }
-
-          state->result.emplace(std::in_place, std::forward<U>(value));
-        }
-
-        state->cv.notify_all();
-        state.reset();
-        return true;
-      }
-
-      /// Rejects the reply with an error.
-      ///
-      /// @return `true` when this call completed the reply, or `false` when the
-      /// reply was invalid or already completed.
-      auto TryReject(cxx::Error error) -> bool
-      {
-        if (!state)
-        {
-          return false;
-        }
-
-        {
-          std::lock_guard lock{state->mutex};
-
-          if (state->result)
-          {
-            return false;
-          }
-
-          state->result.emplace(std::unexpected{std::move(error)});
-        }
-
-        state->cv.notify_all();
-        state.reset();
-        return true;
-      }
-
-      /// Rejects the reply with an adapted enum error code.
-      template <class Enum>
-      requires cxx::ErrorCodeEnum<Enum>
-      auto TryReject(Enum code, std::string message = {}) -> bool
-      {
-        return TryReject(cxx::Error::Make(code, std::move(message)));
-      }
-
-  private:
-
-      template <class>
-      friend auto MakeReply() -> std::pair<Reply, ReplyFuture<T>>;
-
-      explicit Reply(std::shared_ptr<ReplyState<T>> state) : state{std::move(state)} {}
-
-      std::shared_ptr<ReplyState<T>> state{};
-    };
-
-    template <class T>
-    auto MakeReply() -> std::pair<Reply<T>, ReplyFuture<T>>
-    {
-      auto state = std::make_shared<ReplyState<T>>();
-
-      return {Reply<T>{state}, ReplyFuture<T>{std::move(state)}};
-    }
-
-    /// Reply handle specialization for requests that complete without a value.
-    export template <>
-    class Reply<void>
-    {
-  public:
-
-      /// Creates an invalid void reply handle.
-      Reply() = default;
-
-      Reply(const Reply&)                    = delete;
-      auto operator=(const Reply&) -> Reply& = delete;
-
-      Reply(Reply&&) noexcept                    = default;
-      auto operator=(Reply&&) noexcept -> Reply& = default;
-
-      /// Rejects an unresolved reply as abandoned.
-      ~Reply()
-      {
-        if (state)
-        {
-          [[maybe_unused]] const auto completed = TryReject(Error::Make(Errc::ReplyAbandoned));
-        }
-      }
-
-      /// Returns whether this reply has shared reply state.
-      [[nodiscard]] auto IsValid() const -> bool
-      {
-        return static_cast<bool>(state);
-      }
-
-      /// Resolves the reply successfully.
-      ///
-      /// @return `true` when this call completed the reply.
-      auto TryResolve() -> bool
-      {
-        if (!state)
-        {
-          return false;
-        }
-
-        {
-          std::lock_guard lock{state->mutex};
-
-          if (state->result)
-          {
-            return false;
-          }
-
-          state->result.emplace();
-        }
-
-        state->cv.notify_all();
-        state.reset();
-        return true;
-      }
-
-      /// Rejects the reply with an error.
-      auto TryReject(Error error) -> bool
-      {
-        if (!state)
-        {
-          return false;
-        }
-
-        {
-          std::lock_guard lock{state->mutex};
-
-          if (state->result)
-          {
-            return false;
-          }
-
-          state->result.emplace(std::unexpected{std::move(error)});
-        }
-
-        state->cv.notify_all();
-        state.reset();
-        return true;
-      }
-
-      /// Rejects the reply with an adapted enum error code.
-      template <class Enum>
-      requires cxx::ErrorCodeEnum<Enum>
-      auto TryReject(Enum code, std::string message = {}) -> bool
-      {
-        return TryReject(cxx::Error::Make(code, std::move(message)));
-      }
-
-  private:
-
-      template <class>
-      friend auto MakeReply() -> std::pair<Reply, ReplyFuture<void>>;
-
-      explicit Reply(std::shared_ptr<ReplyState<void>> state) : state{std::move(state)} {}
-
-      std::shared_ptr<ReplyState<void>> state{};
-    };
+    using ReplyFuture = oneshot::Receiver<T>;
 
     /// Concept for request types accepted by `Actor::PostAndReply`.
     ///
@@ -895,14 +1620,14 @@ private:
       ///
       /// ## Reply contract
       ///
-      /// The handler must call `request.reply.TryResolve(...)` or
-      /// `request.reply.TryReject(...)`. If the reply handle is destroyed before
-      /// completion, the future receives `Errc::ReplyAbandoned`.
+      /// The handler must call `request.reply.Send(...)` or
+      /// `request.reply.Reject(...)`. If the reply handle is destroyed before
+      /// completion, the future receives `oneshot::Errc::Abandoned`.
       ///
       /// ## Stopped actors
       ///
       /// If the actor is already stopped, no message is posted and the returned
-      /// future is immediately rejected with `Errc::Stopped`.
+      /// future is immediately rejected with `actor::Errc::Stopped`.
       ///
       /// ## Example
       ///
@@ -925,13 +1650,13 @@ private:
       requires actor::ReplyRequest<Request>
       auto PostAndReply(Args&&... args) -> ReplyFuture<typename Request::ReplyType>
       {
-        using Result = Request::ReplyType;
+        using ResultType = typename Request::ReplyType;
 
-        auto [reply, future] = actor::MakeReply<Result>();
+        auto [reply, future] = oneshot::Make<ResultType>();
 
         if (IsStopped())
         {
-          [[maybe_unused]] const auto rejected = reply.TryReject(Error::Make(actor::Errc::Stopped));
+          [[maybe_unused]] auto rejected = reply.Reject(Errc::Stopped);
 
           return future;
         }
@@ -945,10 +1670,10 @@ private:
 
   private:
 
-      template <class Request, class Result, class... Args>
-      static auto MakeReplyMessage(Reply<Result>&& reply, Args&&... args) -> Message
+      template <class Request, class ResultType, class... Args>
+      static auto MakeReplyMessage(Reply<ResultType>&& reply, Args&&... args) -> Message
       {
-        if constexpr (std::constructible_from<Message, std::in_place_type_t<Request>, Reply<Result>&&, Args&&...>)
+        if constexpr (std::constructible_from<Message, std::in_place_type_t<Request>, Reply<ResultType>&&, Args&&...>)
         {
           return Message{std::in_place_type<Request>, std::move(reply), std::forward<Args>(args)...};
         }
@@ -1037,5 +1762,33 @@ private:
   /// Use this when the actor namespace is too verbose at a declaration site.
   export template <typename Message, typename ActorState, typename Handler>
   using Actor = actor::Actor<Message, ActorState, Handler>;
+
+  /// Convenience alias for `cxx::oneshot::Sender`.
+  ///
+  /// Use this when the one-shot namespace is too verbose at a declaration site.
+  ///
+  /// @tparam T Value type sent through the channel.
+  export template <class T>
+  using OneShotSender = oneshot::Sender<T>;
+
+  /// Convenience alias for `cxx::oneshot::Receiver`.
+  ///
+  /// Use this when the one-shot namespace is too verbose at a declaration site.
+  ///
+  /// @tparam T Value type received from the channel.
+  export template <class T>
+  using OneShotReceiver = oneshot::Receiver<T>;
+
+  /// Convenience alias for `cxx::channel::UnboundedSender`.
+  ///
+  /// @tparam T Message type sent through the channel.
+  export template <class T>
+  using UnboundedSender = channel::UnboundedSender<T>;
+
+  /// Convenience alias for `cxx::channel::UnboundedReceiver`.
+  ///
+  /// @tparam T Message type received from the channel.
+  export template <class T>
+  using UnboundedReceiver = channel::UnboundedReceiver<T>;
 
 }  // namespace cxx
