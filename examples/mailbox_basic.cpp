@@ -1,9 +1,9 @@
-import CXXExtension.Collections;
+import IXXExtension.Collections;
 import std;
 
 auto main() -> int
 {
-  cxx::Mailbox<std::string> mailbox;
+  ixx::Mailbox<std::string> mailbox;
 
   mailbox.Push("hello");
   mailbox.Push("world");

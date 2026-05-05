@@ -1,17 +1,17 @@
-﻿/// Thread-safe buffers and actor-style concurrency primitives.
+/// Thread-safe buffers and actor-style concurrency primitives.
 ///
 /// This module exports the synchronized producer buffer used by actors,
 /// request/reply helpers, and a lightweight actor abstraction that can be pumped
 /// manually or run on an owned worker thread.
-export module CXXExtension.Concurrency;
+export module IXXExtension.Concurrency;
 
-import CXXExtension.Core;
-import CXXExtension.Collections;
-import CXXExtension.ContainerExtension;
+import IXXExtension.Core;
+import IXXExtension.Collections;
+import IXXExtension.ContainerExtension;
 
 import std;
 
-namespace cxx
+namespace ixx
 {
 
   /// Thread-safe producer buffer drained by a single owner.
@@ -703,7 +703,7 @@ private:
     /// ## Example
     ///
     /// ```cpp
-    /// auto [sender, receiver] = cxx::oneshot::Make<int>();
+    /// auto [sender, receiver] = ixx::oneshot::Make<int>();
     ///
     /// sender.Send(42);
     /// auto value = receiver.Wait();
@@ -815,7 +815,7 @@ private:
     /// ## Example
     ///
     /// ```cpp
-    /// auto [sender, receiver] = cxx::channel::Unbounded<std::string>();
+    /// auto [sender, receiver] = ixx::channel::Unbounded<std::string>();
     ///
     /// sender.Send("hello");
     /// auto message = receiver.WaitReceive();
@@ -1267,19 +1267,19 @@ private:
 
     /// Result type used by actor reply futures.
     ///
-    /// This is an alias for `cxx::Result<T>`.
+    /// This is an alias for `ixx::Result<T>`.
     export template <class T>
     using ReplyResult = Result<T>;
 
     /// Sending side of an actor request/reply channel.
     ///
-    /// This is an alias for `cxx::oneshot::Sender<T>`.
+    /// This is an alias for `ixx::oneshot::Sender<T>`.
     export template <class T>
     using Reply = oneshot::Sender<T>;
 
     /// Receiving side of an actor request/reply channel.
     ///
-    /// This is an alias for `cxx::oneshot::Receiver<T>`.
+    /// This is an alias for `ixx::oneshot::Receiver<T>`.
     export template <class T>
     using ReplyFuture = oneshot::Receiver<T>;
 
@@ -1314,7 +1314,7 @@ private:
     /// handler(ctx, state, message);
     /// ```
     ///
-    /// where `ctx` is `cxx::actor::Context<Message, ActorState>&`, `state` is
+    /// where `ctx` is `ixx::actor::Context<Message, ActorState>&`, `state` is
     /// `ActorState&`, and `message` is `Message&`.
     ///
     /// ## Thread safety
@@ -1498,7 +1498,7 @@ private:
       ///
       /// struct Handler {
       ///   auto operator()(
-      ///     cxx::actor::Context<Message, State>& ctx,
+      ///     ixx::actor::Context<Message, State>& ctx,
       ///     State& state,
       ///     Message& message
       ///   ) -> void {
@@ -1506,7 +1506,7 @@ private:
       ///   }
       ///
       ///   struct Visitor {
-      ///     cxx::actor::Context<Message, State>& ctx;
+      ///     ixx::actor::Context<Message, State>& ctx;
       ///     State& state;
       ///
       ///     auto operator()(Connected&) -> void {
@@ -1524,7 +1524,7 @@ private:
       ///   };
       /// };
       ///
-      /// auto actor = cxx::actor::Make<Message>(State{}, Handler{});
+      /// auto actor = ixx::actor::Make<Message>(State{}, Handler{});
       /// actor.Post(Message{SendChat{"hello before connect"}});
       /// actor.Update();
       /// actor.Post(Message{Connected{}});
@@ -1634,7 +1634,7 @@ private:
       /// ```cpp
       /// struct GetCount {
       ///   using ReplyType = int;
-      ///   cxx::actor::Reply<int> reply;
+      ///   ixx::actor::Reply<int> reply;
       /// };
       ///
       /// auto future = actor.PostAndReply<GetCount>();
@@ -1737,7 +1737,7 @@ private:
     /// ## Example
     ///
     /// ```cpp
-    /// auto actor = cxx::actor::Make<Message>(State{}, Handler{});
+    /// auto actor = ixx::actor::Make<Message>(State{}, Handler{});
     /// actor.Post(Message{Connected{}});
     /// actor.Update();
     /// ```
@@ -1757,13 +1757,13 @@ private:
 
   }  // namespace actor
 
-  /// Convenience alias for `cxx::actor::Actor`.
+  /// Convenience alias for `ixx::actor::Actor`.
   ///
   /// Use this when the actor namespace is too verbose at a declaration site.
   export template <typename Message, typename ActorState, typename Handler>
   using Actor = actor::Actor<Message, ActorState, Handler>;
 
-  /// Convenience alias for `cxx::oneshot::Sender`.
+  /// Convenience alias for `ixx::oneshot::Sender`.
   ///
   /// Use this when the one-shot namespace is too verbose at a declaration site.
   ///
@@ -1771,7 +1771,7 @@ private:
   export template <class T>
   using OneShotSender = oneshot::Sender<T>;
 
-  /// Convenience alias for `cxx::oneshot::Receiver`.
+  /// Convenience alias for `ixx::oneshot::Receiver`.
   ///
   /// Use this when the one-shot namespace is too verbose at a declaration site.
   ///
@@ -1779,16 +1779,16 @@ private:
   export template <class T>
   using OneShotReceiver = oneshot::Receiver<T>;
 
-  /// Convenience alias for `cxx::channel::UnboundedSender`.
+  /// Convenience alias for `ixx::channel::UnboundedSender`.
   ///
   /// @tparam T Message type sent through the channel.
   export template <class T>
   using UnboundedSender = channel::UnboundedSender<T>;
 
-  /// Convenience alias for `cxx::channel::UnboundedReceiver`.
+  /// Convenience alias for `ixx::channel::UnboundedReceiver`.
   ///
   /// @tparam T Message type received from the channel.
   export template <class T>
   using UnboundedReceiver = channel::UnboundedReceiver<T>;
 
-}  // namespace cxx
+}  // namespace ixx

@@ -1,4 +1,4 @@
-import CXXExtension.Concurrency;
+import IXXExtension.Concurrency;
 import std;
 
 struct Ping
@@ -13,7 +13,7 @@ struct State
 
 struct Handler
 {
-  auto operator()(cxx::actor::Context<Message, State>&, State& state, Message&) -> void
+  auto operator()(ixx::actor::Context<Message, State>&, State& state, Message&) -> void
   {
     ++state.handled;
   }
@@ -21,7 +21,7 @@ struct Handler
 
 auto main() -> int
 {
-  auto actor = cxx::actor::Make<Message>(State{}, Handler{});
+  auto actor = ixx::actor::Make<Message>(State{}, Handler{});
 
   if (!actor.Start()) return 1;
 

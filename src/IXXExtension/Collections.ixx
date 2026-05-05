@@ -3,14 +3,14 @@
 /// This module exports FIFO mailboxes and inboxes with stashing. The types are
 /// intentionally not synchronized; use them when access is owner-local or
 /// externally controlled.
-export module CXXExtension.Collections;
+export module IXXExtension.Collections;
 
-import CXXExtension.Core;
-import CXXExtension.ContainerExtension;
+import IXXExtension.Core;
+import IXXExtension.ContainerExtension;
 
 import std;
 
-namespace cxx
+namespace ixx
 {
 
   /// Small owner-local FIFO mailbox.
@@ -32,7 +32,7 @@ namespace cxx
   /// ## Example
   ///
   /// ```cpp
-  /// cxx::Mailbox<std::string> mailbox;
+  /// ixx::Mailbox<std::string> mailbox;
   ///
   /// mailbox.Push("hello");
   /// mailbox.Push("world");
@@ -174,7 +174,7 @@ private:
   /// ## Example
   ///
   /// ```cpp
-  /// cxx::Inbox<std::string> inbox;
+  /// ixx::Inbox<std::string> inbox;
   ///
   /// inbox.Push("already queued");
   /// inbox.Stash("wait until ready");
@@ -279,4 +279,4 @@ private:
     std::vector<Message> stash{};
   };
 
-}  // namespace cxx
+}  // namespace ixx

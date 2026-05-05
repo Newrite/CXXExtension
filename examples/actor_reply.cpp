@@ -1,4 +1,4 @@
-import CXXExtension.Concurrency;
+import IXXExtension.Concurrency;
 import std;
 
 struct Increment
@@ -8,7 +8,7 @@ struct GetCount
 {
   using ReplyType = int;
 
-  cxx::actor::Reply<int> reply;
+  ixx::actor::Reply<int> reply;
 };
 
 using Message = std::variant<Increment, GetCount>;
@@ -20,7 +20,7 @@ struct State
 
 struct Handler
 {
-  auto operator()(cxx::actor::Context<Message, State>&, State& state, Message& message) -> void
+  auto operator()(ixx::actor::Context<Message, State>&, State& state, Message& message) -> void
   {
     std::visit(Visitor{state}, message);
   }
@@ -43,7 +43,7 @@ struct Handler
 
 auto main() -> int
 {
-  auto actor = cxx::actor::Make<Message>(State{}, Handler{});
+  auto actor = ixx::actor::Make<Message>(State{}, Handler{});
 
   if (!actor.Post(Message{Increment{}})) return 1;
 

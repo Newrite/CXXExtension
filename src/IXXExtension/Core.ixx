@@ -1,13 +1,13 @@
 /// Core error, result, scope, enum, endian, and strong-alias utilities.
 ///
 /// This module provides the common vocabulary used by the rest of
-/// CXXExtension: `Result<T>`, structured `Error` values, opt-in enum bitmask
+/// IXXExtension: `Result<T>`, structured `Error` values, opt-in enum bitmask
 /// operators, byte-order helpers, and type-safe strong aliases.
-export module CXXExtension.Core;
+export module IXXExtension.Core;
 
 import std;
 
-namespace cxx
+namespace ixx
 {
 
   /// Customization point for converting enum values to `std::error_code`.
@@ -134,8 +134,8 @@ public:
   /// ## Example
   ///
   /// ```cpp
-  /// auto err = cxx::Error::Make(cxx::Errc::InvalidArgument, "path is empty");
-  /// if (err.Is(cxx::Errc::InvalidArgument)) {
+  /// auto err = ixx::Error::Make(ixx::Errc::InvalidArgument, "path is empty");
+  /// if (err.Is(ixx::Errc::InvalidArgument)) {
   ///   // handle invalid argument
   /// }
   /// ```
@@ -183,7 +183,7 @@ public:
       std::string                operationOverride = {},
       const std::source_location where             = std::source_location::current()) -> Error
     {
-      return Make(cxx::MakeErrorCode(code), std::move(message), std::move(operationOverride), where);
+      return Make(ixx::MakeErrorCode(code), std::move(message), std::move(operationOverride), where);
     }
 
     /// Creates an error that owns another error as its cause.
@@ -220,7 +220,7 @@ public:
       std::string                operationOverride = {},
       const std::source_location where             = std::source_location::current()) -> Error
     {
-      return Wrap(cxx::MakeErrorCode(code), std::move(inner), std::move(message), std::move(operationOverride), where);
+      return Wrap(ixx::MakeErrorCode(code), std::move(inner), std::move(message), std::move(operationOverride), where);
     }
 
     /// Tests whether this error matches an adapted enum value.
@@ -228,7 +228,7 @@ public:
     requires ErrorCodeEnum<Enum>
     [[nodiscard]] auto Is(const Enum expected) const noexcept -> bool
     {
-      return code == cxx::MakeErrorCode(expected);
+      return code == ixx::MakeErrorCode(expected);
     }
 
     /// Returns the underlying error category name.
@@ -304,14 +304,14 @@ public:
     }
   };
 
-  /// Result type used by CXXExtension operations that may fail.
+  /// Result type used by IXXExtension operations that may fail.
   ///
-  /// `Result<T>` is an alias for `std::expected<T, cxx::Error>`.
+  /// `Result<T>` is an alias for `std::expected<T, ixx::Error>`.
   ///
   /// ## Example
   ///
   /// ```cpp
-  /// cxx::Result<int> value = cxx::ParseInt<>("42");
+  /// ixx::Result<int> value = ixx::ParseInt<>("42");
   /// if (!value) {
   ///   auto message = value.error().message;
   /// }
@@ -322,7 +322,7 @@ public:
   /// Result type for operations that return only success or failure.
   export using VoidResult = std::expected<void, Error>;
 
-  /// Built-in CXXExtension error codes.
+  /// Built-in IXXExtension error codes.
   export enum class Errc : std::uint16_t
   {
     /// No error.
@@ -393,7 +393,7 @@ public:
   /// ## Example
   ///
   /// ```cpp
-  /// auto guard = cxx::ScopeExit{[] { Cleanup(); }};
+  /// auto guard = ixx::ScopeExit{[] { Cleanup(); }};
   /// guard.Release(); // Cleanup will not run.
   /// ```
   ///
@@ -447,7 +447,7 @@ private:
   /// ## Example
   ///
   /// ```cpp
-  /// std::visit(cxx::Overloaded{
+  /// std::visit(ixx::Overloaded{
   ///   [](int value) {},
   ///   [](std::string_view value) {},
   /// }, variant);
@@ -476,7 +476,7 @@ private:
   /// };
   ///
   /// template <>
-  /// inline constexpr bool cxx::EnableBitmaskOperators<Flags> = true;
+  /// inline constexpr bool ixx::EnableBitmaskOperators<Flags> = true;
   /// ```
   export template <class E>
   inline constexpr bool EnableBitmaskOperators = false;
@@ -554,7 +554,7 @@ private:
   ///
   /// ```cpp
   ///
-  /// using UserId = cxx::StrongAlias<std::uint64_t, struct UserIdTag>;
+  /// using UserId = ixx::StrongAlias<std::uint64_t, struct UserIdTag>;
   ///
   /// UserId id{42};
   /// auto raw = id.Value();
@@ -628,15 +628,15 @@ private:
 
 }
 
-/// Hash support for hashable `cxx::StrongAlias` values.
+/// Hash support for hashable `ixx::StrongAlias` values.
 ///
 /// The hash is delegated to the alias's underlying value.
 export template <class T, class Tag>
-requires ::cxx::Hashable<T>
-struct std::hash<::cxx::StrongAlias<T, Tag>>
+requires ::ixx::Hashable<T>
+struct std::hash<::ixx::StrongAlias<T, Tag>>
 {
   /// Returns `std::hash<T>{}(value.Value())`.
-  [[nodiscard]] constexpr auto operator()(const ::cxx::StrongAlias<T, Tag>& value) const noexcept(noexcept(std::hash<T>{}(value.Value())))
+  [[nodiscard]] constexpr auto operator()(const ::ixx::StrongAlias<T, Tag>& value) const noexcept(noexcept(std::hash<T>{}(value.Value())))
     -> std::size_t
   {
     return std::hash<T>{}(value.Value());

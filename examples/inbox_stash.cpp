@@ -1,9 +1,9 @@
-import CXXExtension.Collections;
+import IXXExtension.Collections;
 import std;
 
 auto main() -> int
 {
-  cxx::Inbox<std::string> inbox;
+  ixx::Inbox<std::string> inbox;
 
   inbox.Push("already queued");
   inbox.Stash("wait until ready");

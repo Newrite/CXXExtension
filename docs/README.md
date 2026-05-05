@@ -1,24 +1,24 @@
-# CXXExtension
+# IXXExtension
 
-CXXExtension is a C++23 modules library with small utilities for errors, parsing,
+IXXExtension is a C++23 modules library with small utilities for errors, parsing,
 strings, containers, and concurrency. Concurrency helpers include one-shot
 channels, unbounded channels, and actor-style message processing.
 
 Import the umbrella module when you want the whole library:
 
 ```cpp
-import CXXExtension;
+import IXXExtension;
 ```
 
 Use focused modules when you want a smaller surface:
 
 ```cpp
-import CXXExtension.Core;
-import CXXExtension.Parse;
-import CXXExtension.String;
-import CXXExtension.Collections;
-import CXXExtension.Concurrency;
-import CXXExtension.ContainerExtension;
+import IXXExtension.Core;
+import IXXExtension.Parse;
+import IXXExtension.String;
+import IXXExtension.Collections;
+import IXXExtension.Concurrency;
+import IXXExtension.ContainerExtension;
 ```
 
 ## Guides

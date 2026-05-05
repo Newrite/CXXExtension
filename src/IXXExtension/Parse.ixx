@@ -1,15 +1,15 @@
-/// Parsing helpers that return `cxx::Result<T>` instead of throwing.
+/// Parsing helpers that return `ixx::Result<T>` instead of throwing.
 ///
 /// Parsers trim ASCII whitespace, require the entire trimmed input to be
-/// consumed, and report failures as `cxx::Error` with `Errc::ParseFailed`.
-export module CXXExtension.Parse;
+/// consumed, and report failures as `ixx::Error` with `Errc::ParseFailed`.
+export module IXXExtension.Parse;
 
-import CXXExtension.Core;
-import CXXExtension.String;
+import IXXExtension.Core;
+import IXXExtension.String;
 
 import std;
 
-namespace cxx
+namespace ixx
 {
 
   /// Concept for integer types accepted by numeric parsers.
@@ -32,7 +32,7 @@ namespace cxx
   /// ## Example
   ///
   /// ```cpp
-  /// auto value = cxx::ParseIntegral<int>("101", 2);
+  /// auto value = ixx::ParseIntegral<int>("101", 2);
   /// if (value) {
   ///   // *value == 5
   /// }
@@ -176,7 +176,7 @@ namespace cxx
   /// ## Example
   ///
   /// ```cpp
-  /// auto id = cxx::ParseHex<std::uint32_t>("0xFF");
+  /// auto id = ixx::ParseHex<std::uint32_t>("0xFF");
   /// ```
   export template <ParseInteger T>
   [[nodiscard]] auto ParseHex(std::string_view input) -> Result<T>
@@ -254,8 +254,8 @@ namespace cxx
   /// ## Example
   ///
   /// ```cpp
-  /// auto enabled = cxx::ParseBool("yes");
-  /// auto strict = cxx::ParseBool("1", cxx::BoolParseMode::Strict); // error
+  /// auto enabled = ixx::ParseBool("yes");
+  /// auto strict = ixx::ParseBool("1", ixx::BoolParseMode::Strict); // error
   /// ```
   export [[nodiscard]] inline auto ParseBool(std::string_view input, BoolParseMode mode = BoolParseMode::Relaxed) -> Result<bool>
   {
@@ -324,7 +324,7 @@ namespace cxx
   /// ```cpp
   /// enum class Mode { Read, Write };
   ///
-  /// auto mode = cxx::ParseEnum<Mode>("read", {
+  /// auto mode = ixx::ParseEnum<Mode>("read", {
   ///   {"read", Mode::Read},
   ///   {"write", Mode::Write},
   /// });
@@ -383,7 +383,7 @@ namespace cxx
   /// ## Example
   ///
   /// ```cpp
-  /// auto numbers = cxx::ParseList<int>("1, 2, 3");
+  /// auto numbers = ixx::ParseList<int>("1, 2, 3");
   /// ```
   export template <class T>
   requires ParseInteger<T> || std::floating_point<T> || std::same_as<T, bool>

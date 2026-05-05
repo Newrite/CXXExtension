@@ -3,13 +3,13 @@ set_xmakever("3.0.8")
 local is_standalone = os.projectdir() == os.scriptdir()
 
 if is_standalone then
-    set_project("CXXExtension")
+    set_project("IXXExtension")
     set_version("1.0.0")
     set_defaultmode("releasedbg")
     add_rules("mode.debug", "mode.releasedbg")
 end
 
-target("CXXExtension")
+target("IXXExtension")
     set_kind("moduleonly")
     set_default(is_standalone)
 

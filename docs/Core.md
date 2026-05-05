@@ -1,22 +1,22 @@
 # Core
 
-`CXXExtension.Core` provides shared utility types.
+`IXXExtension.Core` provides shared utility types.
 
 ## Results and errors
 
-`cxx::Result<T>` is `std::expected<T, cxx::Error>`. `cxx::VoidResult` is the
+`ixx::Result<T>` is `std::expected<T, ixx::Error>`. `ixx::VoidResult` is the
 same pattern for operations that return no value.
 
-`cxx::Error` stores a `std::error_code`, a detail message, source location, and
+`ixx::Error` stores a `std::error_code`, a detail message, source location, and
 an optional cause chain.
 
 ```cpp
-auto error = cxx::Error::Make(cxx::Errc::InvalidArgument, "path is empty");
+auto error = ixx::Error::Make(ixx::Errc::InvalidArgument, "path is empty");
 ```
 
 ## Enum error codes
 
-To make your enum usable as an error code, specialize `cxx::ErrorCodeTraits`.
+To make your enum usable as an error code, specialize `ixx::ErrorCodeTraits`.
 
 ```cpp
 enum class LoadErrc
@@ -26,7 +26,7 @@ enum class LoadErrc
 };
 
 template <>
-struct cxx::ErrorCodeTraits<LoadErrc>
+struct ixx::ErrorCodeTraits<LoadErrc>
 {
   static constexpr const char* Name = "load";
 
@@ -44,12 +44,12 @@ struct cxx::ErrorCodeTraits<LoadErrc>
 
 ## Strong aliases
 
-`cxx::StrongAlias<T, Tag>` gives distinct type identity to values with the same
+`ixx::StrongAlias<T, Tag>` gives distinct type identity to values with the same
 underlying representation.
 
 ```cpp
 struct UserIdTag;
-using UserId = cxx::StrongAlias<std::uint64_t, UserIdTag>;
+using UserId = ixx::StrongAlias<std::uint64_t, UserIdTag>;
 
 UserId id{42};
 ```

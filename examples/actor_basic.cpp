@@ -1,4 +1,4 @@
-import CXXExtension.Concurrency;
+import IXXExtension.Concurrency;
 import std;
 
 struct Connected
@@ -19,14 +19,14 @@ struct State
 
 struct Handler
 {
-  auto operator()(cxx::actor::Context<Message, State>& ctx, State& state, Message& message) -> void
+  auto operator()(ixx::actor::Context<Message, State>& ctx, State& state, Message& message) -> void
   {
     std::visit(Visitor{ctx, state}, message);
   }
 
   struct Visitor
   {
-    cxx::actor::Context<Message, State>& ctx;
+    ixx::actor::Context<Message, State>& ctx;
     State&                               state;
 
     auto operator()(Connected&) -> void
@@ -49,7 +49,7 @@ struct Handler
 
 auto main() -> int
 {
-  auto actor = cxx::actor::Make<Message>(State{}, Handler{});
+  auto actor = ixx::actor::Make<Message>(State{}, Handler{});
 
   if (!actor.Post(Message{SendChat{"hello before connect"}})) return 1;
   actor.Update();

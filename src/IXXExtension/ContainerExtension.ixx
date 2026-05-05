@@ -3,11 +3,11 @@
 /// This module wraps common `<ranges>` and container operations with small,
 /// intention-revealing helpers. Functions do not add synchronization; normal
 /// container iterator and reference invalidation rules still apply.
-export module CXXExtension.ContainerExtension;
+export module IXXExtension.ContainerExtension;
 
 import std;
 
-namespace cxx
+namespace ixx
 {
 
   /// Collects a range into `std::vector<range_value_t<R>>`.

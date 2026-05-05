@@ -2,16 +2,16 @@
 ///
 /// This module provides small allocation-returning string helpers plus internal
 /// ASCII predicates used by the parsing module.
-export module CXXExtension.String;
+export module IXXExtension.String;
 
-import CXXExtension.Core;
+import IXXExtension.Core;
 
 import std;
 
-namespace cxx
+namespace ixx
 {
 
-  /// Internal helpers shared by CXXExtension parsing and string utilities.
+  /// Internal helpers shared by IXXExtension parsing and string utilities.
   ///
   /// These functions are exported for module composition, but they are not the
   /// primary public API surface.
@@ -116,7 +116,7 @@ namespace cxx
   /// ## Example
   ///
   /// ```cpp
-  /// auto value = cxx::Trim("  hello\n"); // "hello"
+  /// auto value = ixx::Trim("  hello\n"); // "hello"
   /// ```
   export auto Trim(std::string_view str) -> std::string
   {
@@ -130,7 +130,7 @@ namespace cxx
   /// ## Example
   ///
   /// ```cpp
-  /// auto parts = cxx::Split("a,b,c", ',');
+  /// auto parts = ixx::Split("a,b,c", ',');
   /// ```
   export auto Split(std::string_view str, char delimiter) -> std::vector<std::string>
   {
@@ -177,7 +177,7 @@ namespace cxx
   ///
   /// ```cpp
   /// std::array parts{"red", "green", "blue"};
-  /// auto csv = cxx::Join(parts, ",");
+  /// auto csv = ixx::Join(parts, ",");
   /// ```
   ///
   /// @tparam R Input range whose references can construct `std::string_view`.
@@ -213,7 +213,7 @@ namespace cxx
   /// ## Example
   ///
   /// ```cpp
-  /// auto text = cxx::ReplaceAll("one fish, two fish", "fish", "cat");
+  /// auto text = ixx::ReplaceAll("one fish, two fish", "fish", "cat");
   /// ```
   export auto ReplaceAll(std::string_view source, std::string_view from, std::string_view to) -> std::string
   {

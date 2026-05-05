@@ -1,9 +1,9 @@
-import CXXExtension.Concurrency;
+import IXXExtension.Concurrency;
 import std;
 
 auto main() -> int
 {
-  auto [sender, receiver] = cxx::channel::Unbounded<std::string>();
+  auto [sender, receiver] = ixx::channel::Unbounded<std::string>();
 
   auto sendResult = sender.Send("hello");
   if (!sendResult) return 1;
