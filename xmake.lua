@@ -10,7 +10,7 @@ if is_standalone then
 end
 
 target("CXXExtension")
-    set_kind("static")
+    set_kind("moduleonly")
     set_default(is_standalone)
 
     set_languages("c++23")
