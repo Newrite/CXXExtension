@@ -8,7 +8,7 @@ add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
 target("CXXExtension")
-    set_kind("static")
+    set_kind("moduleonly")
 
     set_languages("c++23")
     set_warnings("allextra")
