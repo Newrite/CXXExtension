@@ -539,31 +539,42 @@ private:
     { std::hash<T>{}(value) } -> std::convertible_to<std::size_t>;
   };
 
-  /// Type-safe wrapper around an underlying value.
+  /// Type-safe wrapper around an underlying value with optional skill mixins.
   ///
-  /// `StrongAlias<T, Tag>` prevents accidental mixing of logically distinct
+  /// `Alias<T, Tag>` prevents accidental mixing of logically distinct
   /// values that share the same representation. Construction is explicit and
-  /// extraction happens through `Value()`.
+  /// extraction happens through `Value()`. Optional `Skills` add small
+  /// opt-in operator surfaces without making every alias support every
+  /// operation.
   ///
   /// ## Ownership
   ///
   /// The alias owns one `T`. Reference-qualified `Value()` overloads preserve
   /// lvalue/rvalue access to the stored value.
   ///
+  /// ## Skills
+  ///
+  /// Skill templates receive the final alias type and may add friend operators.
+  /// For example, `ixx::alias::DereferenceUnwrap` adds `operator*`, and
+  /// `ixx::alias::UnaryArithmetic` adds unary `+` and `-` when the underlying
+  /// value supports them.
+  ///
   /// ## Example
   ///
   /// ```cpp
   ///
-  /// using UserId = ixx::StrongAlias<std::uint64_t, struct UserIdTag>;
+  /// using UserId = ixx::Alias<std::uint64_t, struct UserIdTag, ixx::alias::DereferenceUnwrap>;
   ///
   /// UserId id{42};
   /// auto raw = id.Value();
+  /// auto alsoRaw = *id;
   /// ```
   ///
   /// @tparam T Stored value type.
   /// @tparam Tag Empty tag type that distinguishes this alias from others.
-  export template <class T, class Tag>
-  class StrongAlias
+  /// @tparam Skills Optional CRTP-style skill templates that extend the alias.
+  export template <class T, class Tag, template <class> class... Skills>
+  class Alias : public Skills<Alias<T, Tag, Skills...>>...
   {
 public:
 
@@ -573,14 +584,14 @@ public:
     using tag_type = Tag;
 
     /// Default-constructs the underlying value when `T` supports it.
-    constexpr StrongAlias()
+    constexpr Alias()
     requires std::default_initializable<T>
     = default;
 
     /// Explicitly constructs the alias from a value accepted by `T`.
     template <class U>
-    requires(!std::same_as<std::remove_cvref_t<U>, StrongAlias>) && std::constructible_from<T, U&&>
-    explicit constexpr StrongAlias(U&& value) noexcept(std::is_nothrow_constructible_v<T, U&&>) : value(std::forward<U>(value))
+    requires(!std::same_as<std::remove_cvref_t<U>, Alias>) && std::constructible_from<T, U&&>
+    explicit constexpr Alias(U&& value) noexcept(std::is_nothrow_constructible_v<T, U&&>) : value(std::forward<U>(value))
     {}
 
     /// Returns a mutable reference to the stored value.
@@ -608,14 +619,14 @@ public:
     }
 
     /// Compares two aliases by their underlying values.
-    friend constexpr auto operator==(const StrongAlias& lhs, const StrongAlias& rhs) -> bool
+    friend constexpr auto operator==(const Alias& lhs, const Alias& rhs) -> bool
     requires std::equality_comparable<T>
     {
       return lhs.value == rhs.value;
     }
 
     /// Orders two aliases by their underlying values.
-    friend constexpr auto operator<=>(const StrongAlias& lhs, const StrongAlias& rhs)
+    friend constexpr auto operator<=>(const Alias& lhs, const Alias& rhs)
     requires std::three_way_comparable<T>
     {
       return lhs.value <=> rhs.value;
@@ -626,18 +637,146 @@ private:
     T value{};
   };
 
+  namespace alias
+  {
+
+    /// Reports whether a type is an `ixx::Alias` specialization.
+    ///
+    /// This variable template is `false` for non-alias types and `true` for
+    /// any `Alias<T, Tag, Skills...>` specialization.
+    export template <class>
+    inline constexpr bool IsAlias = false;
+
+    /// Reports that an `ixx::Alias` specialization is an alias type.
+    export template <class T, class Tag, template <class> class... Skills>
+    inline constexpr bool IsAlias<Alias<T, Tag, Skills...>> = true;
+
+    /// Concept satisfied by `ixx::Alias` specializations.
+    export template <class T>
+    concept AliasType = IsAlias<std::remove_cvref_t<T>>;
+
+    /// Function object that explicitly constructs a specific alias type.
+    ///
+    /// Prefer `Into<Alias>(value)` in generic code when the destination alias
+    /// type is known but spelling `Alias{...}` would be awkward.
+    ///
+    /// @tparam Alias Alias type to construct.
+    export template <AliasType Alias>
+    struct IntoFunction
+    {
+      /// Constructs `Alias` from a compatible value.
+      template <class U>
+      requires std::constructible_from<Alias, U&&>
+      [[nodiscard]] constexpr auto operator()(U&& value) const noexcept(std::is_nothrow_constructible_v<Alias, U&&>) -> Alias
+      {
+        return Alias{std::forward<U>(value)};
+      }
+    };
+
+    /// Function object instance for explicitly constructing an alias.
+    ///
+    /// ## Example
+    ///
+    /// ```cpp
+    /// using UserId = ixx::Alias<std::uint64_t, struct UserIdTag>;
+    /// auto id = ixx::alias::Into<UserId>(42);
+    /// ```
+    export template <AliasType Alias>
+    inline constexpr IntoFunction<Alias> Into{};
+
+    /// Function object that extracts the stored value from an alias.
+    ///
+    /// The return type preserves the alias value category. Passing an lvalue
+    /// returns a reference; passing an rvalue returns an rvalue reference.
+    export struct UnwrapFunction
+    {
+      /// Returns `alias.Value()` while preserving value category.
+      template <AliasType Alias>
+      [[nodiscard]] constexpr decltype(auto) operator()(Alias&& alias) const noexcept(noexcept(std::forward<Alias>(alias).Value()))
+      {
+        return std::forward<Alias>(alias).Value();
+      }
+    };
+
+    /// Function object instance for extracting an alias value.
+    export inline constexpr UnwrapFunction Unwrap{};
+
+    /// Skill that adds `operator*` as shorthand for `Value()`.
+    ///
+    /// ## Example
+    ///
+    /// ```cpp
+    /// using UserId = ixx::Alias<int, struct UserIdTag, ixx::alias::DereferenceUnwrap>;
+    /// UserId id{7};
+    /// auto raw = *id;
+    /// ```
+    ///
+    /// @tparam Self Final alias type provided by `Alias`.
+    export template <class Self>
+    struct DereferenceUnwrap
+    {
+      /// Returns `self.Value()` for mutable lvalue aliases.
+      [[nodiscard]] friend constexpr decltype(auto) operator*(Self& self) noexcept(noexcept(self.Value()))
+      {
+        return self.Value();
+      }
+
+      /// Returns `self.Value()` for const lvalue aliases.
+      [[nodiscard]] friend constexpr decltype(auto) operator*(const Self& self) noexcept(noexcept(self.Value()))
+      {
+        return self.Value();
+      }
+
+      /// Returns `std::move(self).Value()` for mutable rvalue aliases.
+      [[nodiscard]] friend constexpr decltype(auto) operator*(Self&& self) noexcept(noexcept(std::move(self).Value()))
+      {
+        return std::move(self).Value();
+      }
+
+      /// Returns `std::move(self).Value()` for const rvalue aliases.
+      [[nodiscard]] friend constexpr decltype(auto) operator*(const Self&& self) noexcept(noexcept(std::move(self).Value()))
+      {
+        return std::move(self).Value();
+      }
+    };
+
+    /// Skill that adds unary arithmetic operators returning the alias type.
+    ///
+    /// Operators are available only when the underlying value supports the
+    /// corresponding unary operation. The result is wrapped back into `Self`.
+    ///
+    /// @tparam Self Final alias type provided by `Alias`.
+    export template <class Self>
+    struct UnaryArithmetic
+    {
+      /// Applies unary `+` to the underlying value and wraps the result.
+      [[nodiscard]] friend constexpr auto operator+(const Self& self) noexcept(noexcept(+self.Value())) -> Self
+      requires requires { +self.Value(); }
+      {
+        return Self{+self.Value()};
+      }
+
+      /// Applies unary `-` to the underlying value and wraps the result.
+      [[nodiscard]] friend constexpr auto operator-(const Self& self) noexcept(noexcept(-self.Value())) -> Self
+      requires requires { -self.Value(); }
+      {
+        return Self{-self.Value()};
+      }
+    };
+
+  }
+
 }
 
-/// Hash support for hashable `ixx::StrongAlias` values.
+/// Hash support for hashable `ixx::Alias` values.
 ///
 /// The hash is delegated to the alias's underlying value.
-export template <class T, class Tag>
+export template <class T, class Tag, template <class> class... Skills>
 requires ::ixx::Hashable<T>
-struct std::hash<::ixx::StrongAlias<T, Tag>>
+struct std::hash<::ixx::Alias<T, Tag, Skills...>>
 {
-  /// Returns `std::hash<T>{}(value.Value())`.
-  [[nodiscard]] constexpr auto operator()(const ::ixx::StrongAlias<T, Tag>& value) const noexcept(noexcept(std::hash<T>{}(value.Value())))
-    -> std::size_t
+  [[nodiscard]] constexpr auto operator()(const ::ixx::Alias<T, Tag, Skills...>& value) const
+    noexcept(noexcept(std::hash<T>{}(value.Value()))) -> std::size_t
   {
     return std::hash<T>{}(value.Value());
   }

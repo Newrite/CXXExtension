@@ -42,14 +42,30 @@ struct ixx::ErrorCodeTraits<LoadErrc>
 };
 ```
 
-## Strong aliases
+## Aliases
 
-`ixx::StrongAlias<T, Tag>` gives distinct type identity to values with the same
-underlying representation.
+`ixx::Alias<T, Tag, Skills...>` gives distinct type identity to values with the
+same underlying representation. Construction is explicit, and `Value()` returns
+the wrapped object with the same lvalue/rvalue category as the alias.
+
+Optional skills add small operator surfaces. `ixx::alias::DereferenceUnwrap`
+adds `operator*` as shorthand for `Value()`, and
+`ixx::alias::UnaryArithmetic` adds unary `+` and `-` when the underlying value
+supports them.
 
 ```cpp
 struct UserIdTag;
-using UserId = ixx::StrongAlias<std::uint64_t, UserIdTag>;
+using UserId = ixx::Alias<std::uint64_t, UserIdTag, ixx::alias::DereferenceUnwrap>;
 
 UserId id{42};
+auto raw = *id;
+```
+
+Use `ixx::alias::Into<Alias>(value)` and `ixx::alias::Unwrap(alias)` in generic
+code when constructing or extracting an alias through a named function object is
+clearer than direct construction.
+
+```cpp
+auto other = ixx::alias::Into<UserId>(7);
+auto value = ixx::alias::Unwrap(other);
 ```
