@@ -26,4 +26,20 @@ if (!port)
 ```
 
 The `examples/` directory contains compile-oriented examples for the major
-modules. They are not currently wired into the provided build files.
+modules. In standalone checkout builds, each example is exposed as an xmake
+target:
+
+```sh
+xmake -g examples
+xmake run example_parse_and_string
+xmake run example_jobs_thread_pool
+```
+
+New code can usually import the umbrella module. Focused imports are available
+when a translation unit only needs one area:
+
+```cpp
+import IXXExtension.Jobs;
+import IXXExtension.Text;
+import IXXExtension.String;
+```

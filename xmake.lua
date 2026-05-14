@@ -19,6 +19,49 @@ target("IXXExtension")
     set_policy("build.c++.modules", true)
     set_policy("check.auto_ignore_flags", false)
 
+    if is_plat("windows") then
+        add_cxxflags("/utf-8", { tools = "cl" })
+        add_cxflags("/utf-8", { tools = "cl" })
+    end
+
     add_includedirs("src", { public = true })
 
     add_files("src/**.ixx",  { public = true, install = true })
+
+if is_standalone then
+    local examples = {
+        "actor_autonomous",
+        "actor_basic",
+        "actor_reply",
+        "alias_basic",
+        "channel_unbounded",
+        "container_extension",
+        "inbox_stash",
+        "jobs_thread_pool",
+        "mailbox_basic",
+        "oneshot_basic",
+        "parse_and_string",
+        "text_utf8",
+    }
+
+    for _, example in ipairs(examples) do
+        target("example_" .. example)
+            set_kind("binary")
+            set_default(false)
+            set_group("examples")
+
+            set_languages("c++23")
+            set_warnings("allextra")
+
+            set_policy("build.c++.modules", true)
+            set_policy("check.auto_ignore_flags", false)
+
+            if is_plat("windows") then
+                add_cxxflags("/utf-8", { tools = "cl" })
+                add_cxflags("/utf-8", { tools = "cl" })
+            end
+
+            add_deps("IXXExtension")
+            add_files("examples/" .. example .. ".cpp")
+    end
+end

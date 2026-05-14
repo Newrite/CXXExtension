@@ -14,6 +14,8 @@
 export module IXXExtension;
 
 export import IXXExtension.Core;
+export import IXXExtension.Jobs;
+export import IXXExtension.Text;
 export import IXXExtension.Parse;
 export import IXXExtension.String;
 export import IXXExtension.Collections;

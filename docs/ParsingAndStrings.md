@@ -12,7 +12,19 @@ auto enabled = ixx::ParseBool("yes");
 Parsing failures use `ixx::Errc::ParseFailed` and include the input text in the
 error message.
 
-`IXXExtension.String` provides allocation-returning helpers such as `Trim`,
-`Split`, `Join`, case conversion, and `ReplaceAll`. Trimming helpers are
-ASCII-oriented. `ToUpper` and `ToLower` use the active C locale through
-`std::toupper` and `std::tolower`.
+`IXXExtension.String` provides allocation-returning helpers such as
+`TrimAscii`, `TrimLeftAscii`, `TrimRightAscii`, `Split`, `Join`, ASCII case
+conversion, and `ReplaceAll`.
+
+String helpers accept common string-like inputs and preserve the source
+character type for `char`, `wchar_t`, `char8_t`, `char16_t`, and `char32_t`
+where the operation is ASCII-oriented.
+
+```cpp
+auto name = ixx::TrimAscii("  Alice\n");
+auto upper = ixx::ToUpperAscii(name);
+auto parts = ixx::Split("red::green::blue", "::");
+auto text = ixx::ReplaceAll("one fish, two fish", "fish", "cat");
+```
+
+`ReplaceAll` returns a copy of the source when the search string is empty.

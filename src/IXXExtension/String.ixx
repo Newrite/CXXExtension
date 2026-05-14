@@ -11,6 +11,14 @@ import std;
 namespace ixx
 {
 
+  /// Alias for `std::basic_string_view` used by string helpers.
+  export template <class CharT, class Traits = std::char_traits<CharT>>
+  using BasicStringView = std::basic_string_view<CharT, Traits>;
+
+  /// Alias for `std::basic_string` used by allocation-returning helpers.
+  export template <class CharT, class Traits = std::char_traits<CharT>, class Allocator = std::allocator<CharT>>
+  using BasicString = std::basic_string<CharT, Traits, Allocator>;
+
   /// Internal helpers shared by IXXExtension parsing and string utilities.
   ///
   /// These functions are exported for module composition, but they are not the
@@ -18,20 +26,30 @@ namespace ixx
   export namespace Internal
   {
 
+    template <class CharT>
+    concept CharacterCodeUnit = std::same_as<CharT, char> || std::same_as<CharT, wchar_t> || std::same_as<CharT, char8_t> ||
+                                std::same_as<CharT, char16_t> || std::same_as<CharT, char32_t>;
+
     /// Returns whether a character is one of the supported ASCII whitespace bytes.
     ///
     /// Recognized characters are space, tab, carriage return, and newline.
-    [[nodiscard]] constexpr auto IsAsciiSpace(char c) noexcept -> bool
+    template <CharacterCodeUnit CharT>
+    [[nodiscard]] constexpr auto IsAsciiSpace(CharT c) noexcept -> bool
     {
-      return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+      return c == static_cast<CharT>(' ') || c == static_cast<CharT>('\t') || c == static_cast<CharT>('\r') ||
+             c == static_cast<CharT>('\n');
     }
 
     /// Removes a leading `0x` or `0X` prefix from a string view.
     ///
     /// The returned view borrows from `s` and never allocates.
-    [[nodiscard]] constexpr auto StripHexPrefix(std::string_view s) noexcept -> std::string_view
+    template <CharacterCodeUnit CharT>
+    [[nodiscard]] constexpr auto StripHexPrefix(BasicStringView<CharT> s) noexcept -> BasicStringView<CharT>
     {
-      if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s.remove_prefix(2);
+      if (s.size() >= 2 && s[0] == static_cast<CharT>('0') && (s[1] == static_cast<CharT>('x') || s[1] == static_cast<CharT>('X')))
+      {
+        s.remove_prefix(2);
+      }
 
       return s;
     }
@@ -39,13 +57,46 @@ namespace ixx
     /// Trims supported ASCII whitespace from both ends of a string view.
     ///
     /// The returned view borrows from `s` and never allocates.
-    [[nodiscard]] constexpr auto TrimAsciiView(std::string_view s) noexcept -> std::string_view
+    template <CharacterCodeUnit CharT>
+    [[nodiscard]] constexpr auto TrimAsciiView(BasicStringView<CharT> s) noexcept -> BasicStringView<CharT>
     {
       while (!s.empty() && IsAsciiSpace(s.front()))
+      {
         s.remove_prefix(1);
+      }
 
       while (!s.empty() && IsAsciiSpace(s.back()))
+      {
         s.remove_suffix(1);
+      }
+
+      return s;
+    }
+
+    /// Trims supported ASCII whitespace from the left side of a string view.
+    ///
+    /// The returned view borrows from `s` and never allocates.
+    template <CharacterCodeUnit CharT>
+    [[nodiscard]] constexpr auto TrimLeftAsciiView(BasicStringView<CharT> s) noexcept -> BasicStringView<CharT>
+    {
+      while (!s.empty() && IsAsciiSpace(s.front()))
+      {
+        s.remove_prefix(1);
+      }
+
+      return s;
+    }
+
+    /// Trims supported ASCII whitespace from the right side of a string view.
+    ///
+    /// The returned view borrows from `s` and never allocates.
+    template <CharacterCodeUnit CharT>
+    [[nodiscard]] constexpr auto TrimRightAsciiView(BasicStringView<CharT> s) noexcept -> BasicStringView<CharT>
+    {
+      while (!s.empty() && IsAsciiSpace(s.back()))
+      {
+        s.remove_suffix(1);
+      }
 
       return s;
     }
@@ -53,9 +104,27 @@ namespace ixx
     /// Converts an ASCII uppercase byte to lowercase.
     ///
     /// Non-ASCII bytes and non-uppercase ASCII bytes are returned unchanged.
-    [[nodiscard]] constexpr auto ToLowerAscii(char c) noexcept -> char
+    template <CharacterCodeUnit CharT>
+    [[nodiscard]] constexpr auto ToLowerAscii(CharT c) noexcept -> CharT
     {
-      if (c >= 'A' && c <= 'Z') return static_cast<char>(c - 'A' + 'a');
+      if (c >= static_cast<CharT>('A') && c <= static_cast<CharT>('Z'))
+      {
+        return static_cast<CharT>(c - static_cast<CharT>('A') + static_cast<CharT>('a'));
+      }
+
+      return c;
+    }
+
+    /// Converts an ASCII lowercase code unit to uppercase.
+    ///
+    /// Non-ASCII code units and non-lowercase ASCII code units are returned unchanged.
+    template <CharacterCodeUnit CharT>
+    [[nodiscard]] constexpr auto ToUpperAscii(CharT c) noexcept -> CharT
+    {
+      if (c >= static_cast<CharT>('a') && c <= static_cast<CharT>('z'))
+      {
+        return static_cast<CharT>(c - static_cast<CharT>('a') + static_cast<CharT>('A'));
+      }
 
       return c;
     }
@@ -63,16 +132,30 @@ namespace ixx
     /// Compares two strings using ASCII-only case folding.
     ///
     /// Unicode case folding is not performed.
-    [[nodiscard]] constexpr auto IEqualsAscii(std::string_view a, std::string_view b) noexcept -> bool
+    template <CharacterCodeUnit CharT>
+    [[nodiscard]] constexpr auto IEqualsAscii(BasicStringView<CharT> a, BasicStringView<CharT> b) noexcept -> bool
     {
-      if (a.size() != b.size()) return false;
-
-      for (size_t i = 0; i < a.size(); ++i)
+      if (a.size() != b.size())
       {
-        if (ToLowerAscii(a[i]) != ToLowerAscii(b[i])) return false;
+        return false;
+      }
+
+      for (std::size_t i = 0; i < a.size(); ++i)
+      {
+        if (ToLowerAscii(a[i]) != ToLowerAscii(b[i]))
+        {
+          return false;
+        }
       }
 
       return true;
+    }
+
+    /// Compares a string view and a string literal using ASCII-only case folding.
+    template <CharacterCodeUnit CharT, std::size_t Size>
+    [[nodiscard]] constexpr auto IEqualsAscii(BasicStringView<CharT> a, const CharT (&b)[Size]) noexcept -> bool
+    {
+      return IEqualsAscii(a, BasicStringView<CharT>{b, Size - 1});
     }
 
     /// Creates a parse error with consistent message text.
@@ -107,6 +190,51 @@ namespace ixx
       return std::unexpected{MakeParseError(function, input, reason, where)};
     }
 
+    template <class T>
+    struct StringLikeChar;
+
+    template <class CharT, class Traits, class Allocator>
+    struct StringLikeChar<std::basic_string<CharT, Traits, Allocator>>
+    {
+      using type = CharT;
+    };
+
+    template <class CharT, class Traits>
+    struct StringLikeChar<std::basic_string_view<CharT, Traits>>
+    {
+      using type = CharT;
+    };
+
+    template <class CharT>
+    struct StringLikeChar<CharT*>
+    {
+      using type = std::remove_cv_t<CharT>;
+    };
+
+    template <class CharT, std::size_t Size>
+    struct StringLikeChar<CharT[Size]>
+    {
+      using type = std::remove_cv_t<CharT>;
+    };
+
+    template <class T>
+    using StringLikeCharT = typename StringLikeChar<std::remove_cvref_t<T>>::type;
+
+    template <class T>
+    concept StringLike = requires { typename StringLikeCharT<T>; };
+
+    template <class T, class CharT>
+    concept StringViewCompatible = std::constructible_from<std::basic_string_view<CharT>, T>;
+
+    template <class T>
+    requires StringLike<T>
+    [[nodiscard]] constexpr auto AsStringView(T&& value) noexcept -> std::basic_string_view<StringLikeCharT<T>>
+    {
+      using CharT = StringLikeCharT<T>;
+
+      return std::basic_string_view<CharT>{value};
+    }
+
   }
 
   /// Returns a copy of a string with ASCII whitespace removed from both ends.
@@ -116,57 +244,192 @@ namespace ixx
   /// ## Example
   ///
   /// ```cpp
-  /// auto value = ixx::Trim("  hello\n"); // "hello"
+  /// auto value = ixx::TrimAscii("  hello\n"); // "hello"
   /// ```
-  export auto Trim(std::string_view str) -> std::string
+  export template <Internal::StringLike Source>
+  requires Internal::CharacterCodeUnit<Internal::StringLikeCharT<Source>>
+  [[nodiscard]] auto TrimAscii(Source&& source) -> BasicString<Internal::StringLikeCharT<Source>>
   {
-    return std::string{Internal::TrimAsciiView(str)};
+    using CharT = Internal::StringLikeCharT<Source>;
+
+    const BasicStringView<CharT> view = Internal::AsStringView(std::forward<Source>(source));
+
+    return BasicString<CharT>{Internal::TrimAsciiView(view)};
+  }
+
+  /// Returns a copy of a string with ASCII whitespace removed from the left.
+  ///
+  /// Only space, tab, carriage return, and newline are trimmed.
+  ///
+  /// ## Example
+  ///
+  /// ```cpp
+  /// auto value = ixx::TrimLeftAscii("\tname ");
+  /// ```
+  export template <Internal::StringLike Source>
+  requires Internal::CharacterCodeUnit<Internal::StringLikeCharT<Source>>
+  [[nodiscard]] auto TrimLeftAscii(Source&& source) -> BasicString<Internal::StringLikeCharT<Source>>
+  {
+    using CharT = Internal::StringLikeCharT<Source>;
+
+    const BasicStringView<CharT> view = Internal::AsStringView(std::forward<Source>(source));
+
+    return BasicString<CharT>{Internal::TrimLeftAsciiView(view)};
+  }
+
+  /// Returns a copy of a string with ASCII whitespace removed from the right.
+  ///
+  /// Only space, tab, carriage return, and newline are trimmed.
+  ///
+  /// ## Example
+  ///
+  /// ```cpp
+  /// auto value = ixx::TrimRightAscii("name \r\n");
+  /// ```
+  export template <Internal::StringLike Source>
+  requires Internal::CharacterCodeUnit<Internal::StringLikeCharT<Source>>
+  [[nodiscard]] auto TrimRightAscii(Source&& source) -> BasicString<Internal::StringLikeCharT<Source>>
+  {
+    using CharT = Internal::StringLikeCharT<Source>;
+
+    const BasicStringView<CharT> view = Internal::AsStringView(std::forward<Source>(source));
+
+    return BasicString<CharT>{Internal::TrimRightAsciiView(view)};
+  }
+
+  /// Returns an uppercase copy using ASCII-only case conversion.
+  ///
+  /// Non-ASCII code units are copied unchanged. The returned string owns the
+  /// converted text and preserves the source character type.
+  ///
+  /// ## Example
+  ///
+  /// ```cpp
+  /// auto value = ixx::ToUpperAscii("ready"); // "READY"
+  /// ```
+  export template <Internal::StringLike Source>
+  requires Internal::CharacterCodeUnit<Internal::StringLikeCharT<Source>>
+  [[nodiscard]] auto ToUpperAscii(Source&& source) -> BasicString<Internal::StringLikeCharT<Source>>
+  {
+    using CharT = Internal::StringLikeCharT<Source>;
+
+    const BasicStringView<CharT> view = Internal::AsStringView(std::forward<Source>(source));
+
+    BasicString<CharT> result{view};
+
+    std::ranges::transform(result, result.begin(), [](CharT c) { return Internal::ToUpperAscii(c); });
+
+    return result;
+  }
+
+  /// Returns a lowercase copy using ASCII-only case conversion.
+  ///
+  /// Non-ASCII code units are copied unchanged. The returned string owns the
+  /// converted text and preserves the source character type.
+  ///
+  /// ## Example
+  ///
+  /// ```cpp
+  /// auto value = ixx::ToLowerAscii("READY"); // "ready"
+  /// ```
+  export template <Internal::StringLike Source>
+  requires Internal::CharacterCodeUnit<Internal::StringLikeCharT<Source>>
+  [[nodiscard]] auto ToLowerAscii(Source&& source) -> BasicString<Internal::StringLikeCharT<Source>>
+  {
+    using CharT = Internal::StringLikeCharT<Source>;
+
+    const BasicStringView<CharT> view = Internal::AsStringView(std::forward<Source>(source));
+
+    BasicString<CharT> result{view};
+
+    std::ranges::transform(result, result.begin(), [](CharT c) { return Internal::ToLowerAscii(c); });
+
+    return result;
   }
 
   /// Splits a string into owned parts separated by one delimiter character.
   ///
-  /// Empty fields are preserved according to `std::views::split` behavior.
+  /// Empty fields are preserved, including leading and trailing empty fields.
   ///
   /// ## Example
   ///
   /// ```cpp
   /// auto parts = ixx::Split("a,b,c", ',');
   /// ```
-  export auto Split(std::string_view str, char delimiter) -> std::vector<std::string>
+  export template <Internal::StringLike Source>
+  [[nodiscard]] auto Split(Source&& source, Internal::StringLikeCharT<Source> delimiter)
+    -> std::vector<BasicString<Internal::StringLikeCharT<Source>>>
   {
-    return str | std::views::split(delimiter) | std::ranges::to<std::vector<std::string>>();
+    using CharT = Internal::StringLikeCharT<Source>;
+
+    const BasicStringView<CharT> src = Internal::AsStringView(std::forward<Source>(source));
+
+    std::vector<BasicString<CharT>> result;
+
+    std::size_t pos = 0;
+
+    while (true)
+    {
+      const std::size_t next = src.find(delimiter, pos);
+
+      if (next == BasicStringView<CharT>::npos)
+      {
+        result.emplace_back(src.substr(pos));
+        break;
+      }
+
+      result.emplace_back(src.substr(pos, next - pos));
+      pos = next + 1;
+    }
+
+    return result;
   }
 
-  /// Returns a copy of a string with ASCII whitespace removed from the left.
+  /// Splits a string into owned parts separated by a string separator.
   ///
-  /// Only space, tab, carriage return, and newline are trimmed.
-  export auto TrimLeft(std::string_view s) -> std::string
-  {
-    auto view = s | std::views::drop_while([](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; });
-
-    return std::string{view.begin(), view.end()};
-  }
-
-  /// Returns an upper-case copy using the active C locale classification.
+  /// Empty fields are preserved, including leading and trailing empty fields.
+  /// If `separator` is empty, the result contains the whole source string.
   ///
-  /// The input string is passed by value and modified in place before being
-  /// returned.
-  export auto ToUpper(std::string str) -> std::string
-  {
-    std::ranges::transform(str, str.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-
-    return str;
-  }
-
-  /// Returns a lower-case copy using the active C locale classification.
+  /// ## Example
   ///
-  /// The input string is passed by value and modified in place before being
-  /// returned.
-  export auto ToLower(std::string str) -> std::string
+  /// ```cpp
+  /// auto parts = ixx::Split("red::green::blue", "::");
+  /// ```
+  export template <Internal::StringLike Source, class Separator>
+  requires Internal::StringViewCompatible<Separator, Internal::StringLikeCharT<Source>>
+  [[nodiscard]] auto Split(Source&& source, Separator&& separator) -> std::vector<BasicString<Internal::StringLikeCharT<Source>>>
   {
-    std::ranges::transform(str, str.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    using CharT = Internal::StringLikeCharT<Source>;
 
-    return str;
+    const BasicStringView<CharT> src = Internal::AsStringView(std::forward<Source>(source));
+
+    const BasicStringView<CharT> sep = BasicStringView<CharT>{std::forward<Separator>(separator)};
+
+    std::vector<BasicString<CharT>> result;
+
+    if (sep.empty())
+    {
+      result.emplace_back(src);
+      return result;
+    }
+
+    std::size_t pos = 0;
+
+    while (true)
+    {
+      const std::size_t next = src.find(sep, pos);
+
+      if (next == BasicStringView<CharT>::npos)
+      {
+        result.emplace_back(src.substr(pos));
+        break;
+      }
+
+      result.emplace_back(src.substr(pos, next - pos));
+      pos = next + sep.size();
+    }
+
+    return result;
   }
 
   /// Joins a range of string-view-compatible parts with a separator.
@@ -184,19 +447,26 @@ namespace ixx
   /// @param parts Range of string-like parts.
   /// @param separator Separator inserted between parts.
   /// @return Joined string.
-  export template <std::ranges::input_range R>
-  requires std::constructible_from<std::string_view, std::ranges::range_reference_t<R>>
-  auto Join(R&& parts, std::string_view separator) -> std::string
+  export template <std::ranges::input_range R, Internal::StringLike Separator>
+  requires Internal::StringViewCompatible<std::ranges::range_reference_t<R>, Internal::StringLikeCharT<Separator>>
+  [[nodiscard]] auto Join(R&& parts, Separator&& separator) -> BasicString<Internal::StringLikeCharT<Separator>>
   {
-    std::string result;
-    bool        first = true;
+    using CharT = Internal::StringLikeCharT<Separator>;
+
+    const BasicStringView<CharT> sep = Internal::AsStringView(std::forward<Separator>(separator));
+
+    BasicString<CharT> result;
+    bool               first = true;
 
     for (auto&& part : parts)
     {
-      if (!first) result += separator;
+      if (!first)
+      {
+        result.append(sep);
+      }
 
-      first   = false;
-      result += std::string_view{part};
+      first = false;
+      result.append(BasicStringView<CharT>{part});
     }
 
     return result;
@@ -207,34 +477,48 @@ namespace ixx
   /// `source`, `from`, and `to` are borrowed only for the duration of the call;
   /// the returned string owns the result.
   ///
-  /// @warning If `from` is empty, this function currently returns an empty
-  /// string.
+  /// If `from` is empty, the function returns a copy of `source`.
   ///
   /// ## Example
   ///
   /// ```cpp
   /// auto text = ixx::ReplaceAll("one fish, two fish", "fish", "cat");
   /// ```
-  export auto ReplaceAll(std::string_view source, std::string_view from, std::string_view to) -> std::string
+  export template <Internal::StringLike Source, class From, class To>
+  requires Internal::StringViewCompatible<From, Internal::StringLikeCharT<Source>> &&
+           Internal::StringViewCompatible<To, Internal::StringLikeCharT<Source>>
+  [[nodiscard]] auto ReplaceAll(Source&& source, From&& from, To&& to) -> BasicString<Internal::StringLikeCharT<Source>>
   {
-    if (from.empty()) return "";
+    using CharT = Internal::StringLikeCharT<Source>;
 
-    std::string result;
-    size_t      pos = 0;
+    const BasicStringView<CharT> src  = Internal::AsStringView(std::forward<Source>(source));
+    const BasicStringView<CharT> old  = BasicStringView<CharT>{std::forward<From>(from)};
+    const BasicStringView<CharT> repl = BasicStringView<CharT>{std::forward<To>(to)};
+
+    if (old.empty())
+    {
+      return BasicString<CharT>{src};
+    }
+
+    BasicString<CharT> result;
+    result.reserve(src.size());
+
+    std::size_t pos = 0;
 
     while (true)
     {
-      const size_t next = source.find(from, pos);
+      const std::size_t next = src.find(old, pos);
 
-      if (next == std::string_view::npos)
+      if (next == BasicStringView<CharT>::npos)
       {
-        result += source.substr(pos);
+        result.append(src.substr(pos));
         break;
       }
 
-      result += source.substr(pos, next - pos);
-      result += to;
-      pos     = next + from.size();
+      result.append(src.substr(pos, next - pos));
+      result.append(repl);
+
+      pos = next + old.size();
     }
 
     return result;

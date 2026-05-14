@@ -51,7 +51,7 @@ auto main() -> int
 
   actor.Update();
 
-  auto count = future.Wait();
+  auto count = future.TryTake();
 
-  return count && *count == 1 ? 0 : 1;
+  return count && *count && **count == 1 ? 0 : 1;
 }

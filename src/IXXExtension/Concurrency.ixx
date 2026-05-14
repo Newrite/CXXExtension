@@ -716,7 +716,10 @@ private:
     {
       auto state = std::make_shared<State<T>>();
 
-      return {Sender<T>{state}, Receiver<T>{std::move(state)}};
+      auto sender   = Sender<T>{state};
+      auto receiver = Receiver<T>{std::move(state)};
+
+      return {std::move(sender), std::move(receiver)};
     }
 
   }
@@ -1220,7 +1223,10 @@ private:
     {
       auto state = std::make_shared<State<T>>();
 
-      return {UnboundedSender<T>{state}, UnboundedReceiver<T>{std::move(state)}};
+      auto sender   = UnboundedSender<T>{state};
+      auto receiver = UnboundedReceiver<T>{std::move(state)};
+
+      return {std::move(sender), std::move(receiver)};
     }
 
   }
@@ -1613,10 +1619,8 @@ private:
       /// Posts a request and returns a future for its one-shot reply.
       ///
       /// `Request` must declare `using ReplyType = T;` and be constructible with
-      /// `Reply<T>` followed by `args...`. When `Message` is a variant that can
-      /// be constructed with `std::in_place_type_t<Request>`, that form is used;
-      /// otherwise the actor constructs `Request{reply, args...}` and then
-      /// constructs `Message` from it.
+      /// `Reply<T>` followed by `args...`. The actor constructs
+      /// `Request{reply, args...}` and then constructs `Message` from it.
       ///
       /// ## Reply contract
       ///
@@ -1652,20 +1656,22 @@ private:
       {
         using ResultType = typename Request::ReplyType;
 
-        auto [reply, future] = oneshot::Make<ResultType>();
+        auto channel = oneshot::Make<ResultType>();
+        auto reply   = std::move(channel.first);
+        auto future  = std::move(channel.second);
 
         if (IsStopped())
         {
           [[maybe_unused]] auto rejected = reply.Reject(Errc::Stopped);
 
-          return future;
+          return std::move(future);
         }
 
         auto message = MakeReplyMessage<Request>(std::move(reply), std::forward<Args>(args)...);
 
         [[maybe_unused]] const auto posted = Post(std::move(message));
 
-        return future;
+        return std::move(future);
       }
 
   private:
@@ -1673,15 +1679,15 @@ private:
       template <class Request, class ResultType, class... Args>
       static auto MakeReplyMessage(Reply<ResultType>&& reply, Args&&... args) -> Message
       {
-        if constexpr (std::constructible_from<Message, std::in_place_type_t<Request>, Reply<ResultType>&&, Args&&...>)
+        Request request{std::move(reply), std::forward<Args>(args)...};
+
+        if constexpr (std::same_as<Message, Request>)
         {
-          return Message{std::in_place_type<Request>, std::move(reply), std::forward<Args>(args)...};
+          return std::move(request);
         }
         else
         {
-          return Message{
-              Request{std::move(reply), std::forward<Args>(args)...}
-          };
+          return Message{std::move(request)};
         }
       }
 
